@@ -1,0 +1,1477 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NinjaTrack – Trade Overview</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+
+    .animate-pulse-dot {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: .4
+      }
+    }
+
+    .animate-spin {
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      from {
+        transform: rotate(0deg)
+      }
+
+      to {
+        transform: rotate(360deg)
+      }
+    }
+
+    .fade-in {
+      animation: fadeIn 0.4s ease;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    /* Sticky save float */
+    .save-float {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 100;
+      animation: fadeIn 0.3s ease;
+    }
+  </style>
+</head>
+
+<body class="bg-[#F8FAFC] text-slate-900 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useEffect, useRef, useCallback } = React;
+
+    // ─── CONFIG ──────────────────────────────────────────────────
+    const SUPABASE_URL = 'https://oiyhrmvcsjxmnfofodhe.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_ol8Jx4QsNZ22v-C1zSBoNQ_AHLFAAFT';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const MAX_TRUCK_CAPACITY = 1200;
+
+    // ─── HELPERS ─────────────────────────────────────────────────
+    const fmtDate = (d) => {
+      if (!d || d === '---') return d || '--';
+      try {
+        const dt = new Date(d);
+        if (isNaN(dt)) return d;
+        return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', weekday: 'short' }).format(dt);
+      } catch { return d; }
+    };
+
+    const weatherFor = (city = '') => {
+      const c = city.toLowerCase();
+      if (c.includes('bangalore') || c.includes('bengaluru')) return { temp: '24°C', cond: 'Cloudy', icon: '☁️', alert: '' };
+      if (c.includes('mumbai')) return { temp: '29°C', cond: 'Rain', icon: '🌧️', alert: 'Rain Risk' };
+      if (c.includes('delhi') || c.includes('nokhra')) return { temp: '34°C', cond: 'Sunny', icon: '☀️', alert: 'High Heat' };
+      if (c.includes('chennai')) return { temp: '30°C', cond: 'Humid', icon: '💨', alert: '' };
+      return { temp: '27°C', cond: 'Clear', icon: '🌤️', alert: '' };
+    };
+
+    const ZONE_STYLES = [
+      { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-800', badge: 'bg-indigo-100 text-indigo-700' },
+      { bg: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-800', badge: 'bg-rose-100 text-rose-700' },
+      { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-800', badge: 'bg-amber-100 text-amber-700' },
+      { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-800', badge: 'bg-emerald-100 text-emerald-700' },
+      { bg: 'bg-cyan-50', border: 'border-cyan-200', text: 'text-cyan-800', badge: 'bg-cyan-100 text-cyan-700' },
+    ];
+
+    // ─── PROCESS RAW SUPABASE DATA ────────────────────────────────
+    // Physical front-to-back order of loading positions (Driver Side = front/top of diagram)
+    const ZONE_ORDER = ['Driver Side', '2nd From Driver Side', 'Middle', '2nd From Last', 'Opening Side'];
+    // Canonical grade sort order for manifest table
+    const GRADE_ORDER = ['SSSSS', 'SSSS', 'SSS', 'SS', 'S', 'SPL', 'A1', 'A2', 'A3', 'SB1', 'SB2', 'Loose A', 'Loose B', 'Super 1', 'Super 2', 'K', 'Green', 'Goli', 'F1', 'F2', 'Others'];
+
+    function processTrips(trades, manifests, expenses = []) {
+      return trades.map(trade => {
+        const mfst = manifests.filter(m => m.trip_id === trade.trip_id);
+        const exps = expenses.filter(e => e.trip_id === trade.trip_id);
+
+        // Source-side expenses (Advances)
+        const sourceExps = exps.filter(e => e.paid_by === 'Source');
+        const transportAdvance = sourceExps.find(e => e.expense_type === 'Transport')?.amount || 0;
+
+        // Demand-side expenses (Deductions)
+        const demandExps = exps.filter(e => e.paid_by === 'Demand');
+        const dMap = {};
+        demandExps.forEach(e => {
+          const key = e.expense_type.toLowerCase();
+          dMap[key] = e.amount;
+          if (key === 'other') dMap.note = e.notes;
+        });
+
+        const marksMap = new Map();
+        const varietySet = new Set();
+        let totalBoxes = 0;
+        let totalReceived = 0;
+        const zoneMap = new Map();
+
+        mfst.forEach((item, idx) => {
+          const brand = item.brand_name || 'Unbranded';
+          const variety = item.variety_grade || 'Mix';
+          const qty = item.quantity_boxes || 0;
+          const recv = item.received_boxes ?? null;
+          const rate = item.sales_rate ?? 0;
+
+          varietySet.add(variety);
+          totalBoxes += qty;
+          if (recv !== null) totalReceived += recv;
+
+          if (!marksMap.has(brand)) marksMap.set(brand, { id: `m-${idx}`, name: brand, grades: {} });
+
+          marksMap.get(brand).grades[variety] = {
+            id: item.id, // Store manifest item id for patching
+            manifest: qty,
+            received: recv,
+            rate: rate
+          };
+
+          const pattern = item.packing_type || 'General';
+          if (!zoneMap.has(pattern)) zoneMap.set(pattern, { count: 0, marks: new Set() });
+          zoneMap.get(pattern).count += qty;
+          if (brand) zoneMap.get(pattern).marks.add(brand);
+        });
+
+        // Sort zones front → back (Driver Side at top of truck diagram)
+        const loadingZones = Array.from(zoneMap.entries())
+          .sort(([a], [b]) => {
+            const ai = ZONE_ORDER.indexOf(a); const bi = ZONE_ORDER.indexOf(b);
+            return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+          })
+          .map(([name, data], i) => {
+            const s = ZONE_STYLES[i % ZONE_STYLES.length];
+            return { id: `z-${i}`, name, description: Array.from(data.marks).join(', '), count: data.count, ...s };
+          });
+
+        return {
+          details: {
+            tripId: trade.trip_id,
+            vehicleNo: trade.vehicle_number || 'Unknown',
+            driverName: trade.driver_name || '--',
+            driverContact: trade.driver_mobile || '--',
+            origin: trade.source_location || '--',
+            destination: trade.destination_market || '--',
+            dispatchDate: trade.dispatch_date || '',
+            eta: trade.arrival_date || '',
+            status: ['CREATED', 'DISPATCHED', 'IN_TRANSIT'].includes(trade.status) ? 'IN_TRANSIT' : trade.status || 'IN_TRANSIT',
+            liveUrl: trade.tracking_link || '#',
+            supplier: trade.vendor_name || '--',
+            tradeMode: trade.trade_mode || 'Commission',
+            dtName: trade.dt_name || '',
+            transportAdvance,
+            freight: dMap.freight || trade.freight_amount || 0,
+            coolie: dMap.coolie || trade.coolie_amount || 0,
+            commission: dMap.commission || trade.commission_amount || 0,
+            otherExpenses: dMap.other || trade.other_expenses || 0,
+            otherNote: dMap.note || trade.other_expenses_note || '',
+          },
+          marks: Array.from(marksMap.values()),
+          gradeColumns: Array.from(varietySet).sort((a, b) => {
+            const ai = GRADE_ORDER.indexOf(a); const bi = GRADE_ORDER.indexOf(b);
+            return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+          }),
+          loadingZones,
+          totalBoxes,
+          totalReceived,
+          rawManifest: mfst, // Store for easy reference
+          videos: [],
+        };
+      });
+    }
+
+    // ─── STATUS BADGE ─────────────────────────────────────────────
+    function StatusBadge({ status }) {
+      const isTransit = status === 'IN_TRANSIT';
+      const isArrived = status === 'REACHED_MARKET';
+      const isSales = ['SALES_STARTED', 'SALES_COMPLETED'].includes(status);
+      const isClosed = status === 'CLOSED';
+
+      let cls = 'bg-slate-50 text-slate-600 border-slate-200';
+      let dot = 'bg-slate-400';
+      let label = status.replace(/_/g, ' ');
+
+      if (isTransit) {
+        cls = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+        dot = 'bg-emerald-500 animate-pulse-dot';
+      } else if (isArrived) {
+        cls = 'bg-blue-50 text-blue-700 border-blue-200';
+        dot = 'bg-blue-500';
+      } else if (isSales) {
+        cls = 'bg-amber-50 text-amber-700 border-amber-200';
+        dot = 'bg-amber-500';
+      } else if (isClosed) {
+        cls = 'bg-slate-900 text-slate-100 border-slate-800';
+        dot = 'bg-slate-400';
+      }
+
+      return (
+        <span className={`px-3 py-1 rounded-xl text-[11px] font-bold uppercase tracking-wide border flex items-center gap-1.5 ${cls}`}>
+          <span className={`w-2 h-2 rounded-full ${dot}`}></span>{label}
+        </span>
+      );
+    }
+
+    // ─── QUICK STATUS PICKER ───────────────────────────────────
+    // Inline 2-click status changer: click badge → pick new status → auto-saves
+    function QuickStatusPicker({ currentStatus, tripId, onSaved, setSaveMsg }) {
+      const [open, setOpen] = React.useState(false);
+      const [saving, setSaving] = React.useState(false);
+      const ref = React.useRef(null);
+      React.useEffect(() => {
+        const h = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        document.addEventListener('mousedown', h);
+        return () => document.removeEventListener('mousedown', h);
+      }, []);
+
+      const pick = async (newStatus) => {
+        if (newStatus === currentStatus) { setOpen(false); return; }
+        setSaving(true);
+        try {
+          const { error } = await supabase.from('trades').update({ status: toDbStatus(newStatus) }).eq('trip_id', tripId);
+          if (error) throw error;
+          onSaved(newStatus);
+          setSaveMsg('✓ Status updated');
+          setTimeout(() => setSaveMsg(''), 3000);
+        } catch (e) {
+          setSaveMsg('❌ ' + (e.message || 'Update failed'));
+        } finally { setSaving(false); setOpen(false); }
+      };
+
+      return (
+        <div ref={ref} className="relative">
+          <button onClick={() => !saving && setOpen(o => !o)}
+            title="Click to change status"
+            className="flex items-center gap-1.5 hover:opacity-80 active:scale-95 transition-all cursor-pointer">
+            <StatusBadge status={currentStatus} />
+            <span className="text-slate-300 text-[10px]">{saving ? '🔄' : '▾'}</span>
+          </button>
+          {open && (
+            <div style={{ position: 'fixed', top: saving ? 0 : undefined, zIndex: 9999 }}
+              className="bg-white border border-slate-200 rounded-xl shadow-2xl py-1 min-w-[190px] fade-in"
+              ref={node => {
+                if (node && ref.current) {
+                  const btn = ref.current.querySelector('button');
+                  if (btn) {
+                    const r = btn.getBoundingClientRect();
+                    node.style.top = (r.bottom + 4) + 'px';
+                    node.style.left = r.left + 'px';
+                  }
+                }
+              }}>
+              <p className="px-3 pt-1.5 pb-1 text-[9px] font-black text-slate-400 uppercase tracking-widest">Change Status</p>
+              {STATUSES.map(s => (
+                <button key={s.value} onClick={() => pick(s.value)}
+                  className={`w-full text-left px-3 py-2 text-sm font-semibold flex items-center gap-2 hover:bg-slate-50 transition-colors
+                    ${s.value === currentStatus ? 'text-emerald-700 bg-emerald-50 font-black' : 'text-slate-700'}`}>
+                  {s.value === currentStatus && <span className="text-emerald-500 text-xs">✓</span>}
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── FLEET CARD ───────────────────────────────────────────────
+    function FleetCard({ trip, onClick }) {
+      const isTransit = ['DISPATCHED', 'IN TRANSIT'].includes(trip.details.status);
+      const isArrived = trip.details.status === 'ARRIVED MARKET';
+      return (
+        <div onClick={onClick}
+          className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-lg hover:border-emerald-300 transition-all cursor-pointer group fade-in">
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center text-2xl group-hover:bg-emerald-50 transition-colors">🚛</div>
+              <div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{trip.details.tripId}</div>
+                <div className="font-bold text-slate-900">{trip.details.vehicleNo}</div>
+              </div>
+            </div>
+            <StatusBadge status={trip.details.status} />
+          </div>
+
+          <div className="flex items-center justify-between mb-3 text-sm font-semibold text-slate-700">
+            <span>{trip.details.origin}</span>
+            <span className="text-slate-300 mx-2">→</span>
+            <span>{trip.details.destination}</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-xs">
+            <div>
+              <div className="text-slate-400 font-bold uppercase text-[10px] mb-0.5">Dispatch</div>
+              <div className="font-bold text-slate-800">{fmtDate(trip.details.dispatchDate)}</div>
+            </div>
+            <div>
+              <div className="text-slate-400 font-bold uppercase text-[10px] mb-0.5">Supplier</div>
+              <div className="font-bold text-slate-800 truncate">{trip.details.supplier}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-slate-400 font-bold uppercase text-[10px] mb-0.5">Boxes</div>
+              <div className="font-black text-emerald-600 text-sm">{trip.totalBoxes}</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── DETAIL VIEW ──────────────────────────────────────────────
+    // DB enum value → display label. Run: SELECT unnest(enum_range(NULL::trade_status)); to verify exact DB values.
+    const STATUSES = [
+      { value: 'IN_TRANSIT', label: 'In-transit' },
+      { value: 'REACHED_MARKET', label: 'Reached Market' },
+      { value: 'SALES_STARTED', label: 'Sales started' },
+      { value: 'SALES_COMPLETED', label: 'Sales Completed' },
+      { value: 'CLOSED', label: 'Closed' },
+    ];
+    // Map frontend display values → actual Supabase enum values
+    const STATUS_TO_DB = {
+      'IN_TRANSIT': 'DISPATCHED',       // DB uses DISPATCHED, we display as IN_TRANSIT
+      'REACHED_MARKET': 'REACHED_MARKET',
+      'SALES_STARTED': 'SALES_STARTED',
+      'SALES_COMPLETED': 'SALES_COMPLETED',
+      'CLOSED': 'CLOSED',
+    };
+    const toDbStatus = s => STATUS_TO_DB[s] || s;
+
+    function DetailView({ trip, allTrips, onBack, onSwitch, onUpdate }) {
+      const [videos, setVideos] = useState([]);
+      const fileRef = useRef(null);
+      const [editing, setEditing] = useState(false);
+      const [saving, setSaving] = useState(false);
+      const [saveMsg, setSaveMsg] = useState('');
+      const [showStatusPrompt, setShowStatusPrompt] = useState(false);
+      const [localDetails, setLocalDetails] = useState(trip.details);
+      const [editData, setEditData] = useState({
+        status: trip.details.status, destination: trip.details.destination,
+        eta: trip.details.eta, dtName: trip.details.dtName,
+      });
+      const [tripNotes, setTripNotes] = useState(trip.details.notes || '');
+
+      const [activeTab, setActiveTab] = useState('dashboard');
+
+      // Item data state: { manifest_id: { received, rate } }
+      const [itemData, setItemData] = useState({});
+      const [expenses, setExpenses] = useState({
+        freight: trip.details.freight,
+        coolie: trip.details.coolie,
+        commission: trip.details.commission,
+        other: trip.details.otherExpenses,
+        note: trip.details.otherNote
+      });
+
+      // Initialize/Sync local state when switching trips
+      useEffect(() => {
+        setLocalDetails(trip.details);
+        setEditData({ status: trip.details.status, destination: trip.details.destination, eta: trip.details.eta, dtName: trip.details.dtName });
+        setExpenses({
+          freight: trip.details.freight,
+          coolie: trip.details.coolie,
+          commission: trip.details.commission,
+          other: trip.details.otherExpenses,
+          note: trip.details.otherNote
+        });
+
+        const initialItems = {};
+        trip.marks.forEach(m => Object.values(m.grades).forEach(g => {
+          initialItems[g.id] = { received: g.received ?? '', rate: g.rate || '' };
+        }));
+        setItemData(initialItems);
+
+        setTripNotes(trip.details.notes || '');
+        setShowStatusPrompt(false);
+        setEditing(false); setSaveMsg('');
+      }, [trip.details.tripId]);
+
+      const w = weatherFor(localDetails.destination);
+
+      const totals = useMemo(() => {
+        const g = {}; let grand = 0; let recvGrand = 0; let gross = 0;
+        trip.gradeColumns.forEach(k => g[k] = 0);
+
+        trip.marks.forEach(m => {
+          Object.entries(m.grades).forEach(([k, v]) => {
+            const data = itemData[v.id] || { received: v.received, rate: v.rate };
+            g[k] = (g[k] || 0) + v.manifest;
+            grand += v.manifest;
+            const r = parseFloat(data.received) || 0;
+            const rt = parseFloat(data.rate) || 0;
+            recvGrand += r;
+            gross += r * rt;
+          });
+        });
+
+        const totalExp = (parseFloat(expenses.freight) || 0) + (parseFloat(expenses.coolie) || 0) + (parseFloat(expenses.commission) || 0) + (parseFloat(expenses.other) || 0);
+        const net = gross - totalExp;
+        const netPerBox = recvGrand > 0 ? Math.round(net / recvGrand) : 0;
+        return { ...g, grand, recvGrand, gross, net, netPerBox };
+      }, [trip, itemData, expenses]);
+
+      const cap = Math.min(Math.round((totals.grand / MAX_TRUCK_CAPACITY) * 100), 100);
+      const showSales = ['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(localDetails.status);
+
+      const setEdit = (k, v) => setEditData(d => ({ ...d, [k]: v }));
+      const setItem = (id, k, v) => setItemData(prev => ({ ...prev, [id]: { ...prev[id], [k]: v } }));
+
+      const saveMarketData = async () => {
+        setSaving(true); setSaveMsg('Saving records...'); setShowStatusPrompt(false);
+        try {
+          // 1. Update manifest items (Source of truth for current state)
+          const updates = Object.entries(itemData).map(([id, data]) => ({
+            id: id,
+            received_boxes: data.received === '' ? null : parseInt(data.received),
+            sales_rate: data.rate === '' ? null : parseFloat(data.rate)
+          }));
+
+          for (const up of updates) {
+            const { error } = await supabase.from('trade_manifest').update({
+              received_boxes: up.received_boxes,
+              sales_rate: up.sales_rate
+            }).eq('id', up.id);
+            if (error) throw error;
+          }
+
+          // 2. Update destination expenses in dedicated table (Roadmap Phase 2)
+          const destExps = [
+            { type: 'Freight', amount: parseFloat(expenses.freight) || 0 },
+            { type: 'Coolie', amount: parseFloat(expenses.coolie) || 0 },
+            { type: 'Commission', amount: parseFloat(expenses.commission) || 0 },
+            { type: 'Other', amount: parseFloat(expenses.other) || 0, notes: expenses.note || '' }
+          ].filter(ex => ex.amount > 0);
+
+          await supabase.from('expenses').delete().eq('trip_id', localDetails.tripId).eq('paid_by', 'Demand');
+          if (destExps.length > 0) {
+            const { error: eExp } = await supabase.from('expenses').insert(
+              destExps.map(ex => ({
+                trip_id: localDetails.tripId,
+                expense_type: ex.type,
+                amount: ex.amount,
+                paid_by: 'Demand',
+                notes: ex.notes || ''
+              }))
+            );
+            if (eExp) throw eExp;
+          }
+
+          // 3. Record Sales Transactions (Roadmap Phase 2)
+          const salesRecords = updates.filter(up => (up.received_boxes || 0) > 0 && (up.sales_rate || 0) > 0).map(up => {
+            let variety = 'Unknown';
+            // Find variety name from original manifest
+            trip.marks.forEach(m => {
+              Object.entries(m.grades).forEach(([k, v]) => { if (v.id === up.id) variety = k; });
+            });
+
+            return {
+              trip_id: localDetails.tripId,
+              variety_grade: variety,
+              quantity: up.received_boxes,
+              rate: up.sales_rate
+              // total_amount is a GENERATED column in Supabase (quantity × rate), DB computes it
+            };
+          });
+
+          if (salesRecords.length > 0) {
+            await supabase.from('sales_transactions').delete().eq('trip_id', localDetails.tripId);
+            const { error: eSales } = await supabase.from('sales_transactions').insert(salesRecords);
+            if (eSales) throw eSales;
+          }
+
+          // Save trip notes
+          if (tripNotes !== (trip.details.notes || '')) {
+            await supabase.from('trades').update({ notes: tripNotes }).eq('trip_id', localDetails.tripId);
+          }
+
+          // Check if we should prompt for status bump
+          const hasRates = Object.values(itemData).some(d => parseFloat(d.rate) > 0);
+          const notYetCompleted = !['SALES_COMPLETED', 'CLOSED'].includes(localDetails.status);
+          if (hasRates && notYetCompleted) setShowStatusPrompt(true);
+
+          setSaveMsg('✓ Market data & transactions saved');
+          onUpdate(localDetails.tripId, {
+            ...localDetails,
+            freight: expenses.freight,
+            coolie: expenses.coolie,
+            commission: expenses.commission,
+            otherExpenses: expenses.other,
+            otherNote: expenses.note,
+            notes: tripNotes
+          });
+          setTimeout(() => setSaveMsg(''), 4000);
+        } catch (e) {
+          setSaveMsg('❌ ' + (e.message || 'Save failed'));
+        } finally { setSaving(false); }
+      };
+
+      const saveEdits = async () => {
+        const s = editData.status;
+        const reachedMark = ['REACHED_MARKET', 'SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(s);
+        const salesStart = ['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(s);
+
+        if (reachedMark) {
+          if (!editData.destination?.trim()) { setSaveMsg('❌ Destination Market is required'); return; }
+          if (!editData.eta) { setSaveMsg('❌ Arrival Date is required'); return; }
+        }
+        if (salesStart) {
+          if (!editData.dtName?.trim()) { setSaveMsg('❌ DT Name is required'); return; }
+        }
+
+        setSaving(true);
+        try {
+          const { error } = await supabase.from('trades').update({
+            status: toDbStatus(editData.status),
+            destination_market: editData.destination,
+            arrival_date: editData.eta || null,
+            dt_name: editData.dtName,
+          }).eq('trip_id', localDetails.tripId);
+          if (error) throw error;
+          const updated = { ...localDetails, ...editData };
+          setLocalDetails(updated);
+          onUpdate(localDetails.tripId, updated);
+          setEditing(false);
+          setSaveMsg('✓ Saved successfully');
+          setTimeout(() => setSaveMsg(''), 3000);
+        } catch (e) {
+          setSaveMsg('❌ ' + (e.message || 'Save failed'));
+        } finally { setSaving(false); }
+      };
+
+      const addVideo = (e) => {
+        const f = e.target.files?.[0]; if (!f) return;
+        const url = URL.createObjectURL(f);
+        setVideos(v => [...v, { id: Date.now(), title: f.name, url }]);
+        e.target.value = '';
+      };
+
+      return (
+        <div className="space-y-6 fade-in pb-16 pt-6">
+
+          {/* Back + switcher */}
+          <div className="flex items-center justify-between">
+            <button onClick={onBack} className="flex items-center gap-2 text-slate-500 hover:text-slate-800 text-sm font-bold transition-colors">
+              ← Back to Fleet
+            </button>
+            {allTrips.length > 1 && (
+              <select
+                className="text-sm font-bold border border-slate-200 rounded-lg px-3 py-1.5 bg-white cursor-pointer focus:outline-none focus:border-emerald-400"
+                value={trip.details.tripId}
+                onChange={e => onSwitch(e.target.value)}>
+                {allTrips.map(t => <option key={t.details.tripId} value={t.details.tripId}>{t.details.vehicleNo} – {t.details.tripId}</option>)}
+              </select>
+            )}
+          </div>
+
+          {/* Control Tower */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-lg overflow-hidden">
+            <div className="h-1.5 bg-gradient-to-r from-emerald-500 via-emerald-400 to-cyan-400"></div>
+            <div className="p-6 lg:p-8">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                <div>
+                  <span className="text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200 px-2 py-0.5 rounded uppercase tracking-widest">Trip ID</span>
+                  <h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">{localDetails.tripId}</h1>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <QuickStatusPicker
+                    currentStatus={localDetails.status}
+                    tripId={localDetails.tripId}
+                    setSaveMsg={setSaveMsg}
+                    onSaved={newStatus => {
+                      const updated = { ...localDetails, status: newStatus };
+                      setLocalDetails(updated);
+                      setEditData(d => ({ ...d, status: newStatus }));
+                      onUpdate(localDetails.tripId, updated);
+                    }}
+                  />
+                  <button onClick={() => { setEditing(e => !e); setSaveMsg(''); }}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-all
+                      ${editing ? 'bg-amber-500 text-white border-amber-500 shadow-sm' : 'bg-white text-slate-500 border-slate-200 hover:border-amber-400 hover:text-amber-600'}`}>
+                    ✏️ {editing ? 'Editing…' : 'Edit Details'}
+                  </button>
+                </div>
+              </div>
+
+              {/* ── INLINE EDIT PANEL ── */}
+              {editing && (
+                <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-4 fade-in">
+                  <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest">Edit Trip Details</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Status</label>
+                      <select value={editData.status} onChange={e => setEdit('status', e.target.value)}
+                        className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none cursor-pointer">
+                        {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
+                        Destination Market {['REACHED_MARKET', 'SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
+                      </label>
+                      <input type="text" value={editData.destination} onChange={e => setEdit('destination', e.target.value)}
+                        placeholder="e.g. Chennai"
+                        className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
+                        ETA (Arrival Date) {['REACHED_MARKET', 'SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
+                      </label>
+                      <input type="date" value={editData.eta} onChange={e => setEdit('eta', e.target.value)}
+                        className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
+                        DT Name {['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
+                      </label>
+                      <input type="text" value={editData.dtName} onChange={e => setEdit('dtName', e.target.value)}
+                        placeholder="Trader / Customer name"
+                        className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 pt-1">
+                    {saveMsg && <span className={`text-sm font-bold ${saveMsg.startsWith('✓') ? 'text-emerald-600' : 'text-red-500'}`}>{saveMsg}</span>}
+                    <div className="flex gap-2 ml-auto">
+                      <button onClick={() => { setEditing(false); setEditData({ status: localDetails.status, destination: localDetails.destination, eta: localDetails.eta, dtName: localDetails.dtName }); }}
+                        className="px-4 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
+                      <button onClick={saveEdits} disabled={saving}
+                        className="px-4 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors">
+                        {saving ? 'Saving…' : 'Save Changes'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {saveMsg && !editing && (
+                <div className="mb-4 px-4 py-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold rounded-lg fade-in flex items-center justify-between">
+                  <span>{saveMsg}</span>
+                  {saveMsg.includes(' manifest') && <span className="animate-spin text-xl">⏳</span>}
+                </div>
+              )}
+
+              {/* Tab Navigation */}
+              <div className="flex border-b border-slate-100 mt-2 -mx-6 lg:-mx-8 px-6 lg:px-8">
+                {[
+                  { id: 'dashboard', label: '📊 Dashboard', count: null },
+                  { id: 'market', label: '🛒 Market & Sales', count: null },
+                  { id: 'manifest', label: '📋 Manifest', count: totals.grand },
+                ].map(t => (
+                  <button key={t.id} onClick={() => setActiveTab(t.id)}
+                    className={`px-4 py-3 text-xs font-black uppercase tracking-widest transition-all border-b-2
+                      ${activeTab === t.id ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+                    {t.label} {t.count !== null && <span className="ml-1 opacity-50">({t.count})</span>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {activeTab === 'dashboard' && (
+            <div className="space-y-6 fade-in">
+              {/* Summary Stats moved here if needed, or keep in header if critical */}
+              {showSales && totals.net > 0 && (
+                <div className="p-4 bg-emerald-600 rounded-xl text-white flex flex-wrap gap-6 items-center shadow-lg">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase opacity-80 tracking-widest">Net Realization</p>
+                    <h3 className="text-2xl font-black">₹ {totals.net.toLocaleString()}</h3>
+                  </div>
+                  <div className="h-8 w-px bg-white/20"></div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase opacity-80 tracking-widest">Received Stock</p>
+                    <h3 className="text-xl font-black">{totals.recvGrand} Boxes</h3>
+                  </div>
+                  {totals.netPerBox > 0 && (
+                    <>
+                      <div className="h-8 w-px bg-white/20"></div>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase opacity-80 tracking-widest">Net / Box</p>
+                        <h3 className="text-xl font-black">₹ {totals.netPerBox.toLocaleString()}</h3>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Grid */}
+
+              {/* Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+
+                {/* Route */}
+                <div className="lg:col-span-2 bg-slate-50 rounded-xl p-5 border border-slate-100 relative overflow-hidden">
+                  <div className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center gap-1.5">📍 Route</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-slate-900">{localDetails.origin}</div>
+                      <div className="text-xs mt-1.5 bg-white px-2 py-1 rounded border border-slate-100 text-emerald-700 font-bold inline-flex items-center gap-1">
+                        📅 {fmtDate(localDetails.dispatchDate)}
+                      </div>
+                    </div>
+                    <div className="text-slate-300 text-xl">→</div>
+                    <div className="text-right">
+                      <div className="font-bold text-slate-900">{localDetails.destination}</div>
+                      <div className="text-xs mt-1.5 bg-white px-2 py-1 rounded border border-slate-100 text-slate-600 font-bold inline-flex items-center gap-1">
+                        {localDetails.eta ? fmtDate(localDetails.eta) : '—'} ⏱
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Capacity */}
+                <div className="bg-white rounded-xl p-5 border border-slate-100 shadow-sm">
+                  <div className="text-xs font-bold text-slate-500 uppercase mb-2">📦 Utilization</div>
+                  <div className="flex justify-between items-end mb-1.5">
+                    <span className="text-2xl font-black text-slate-900">{totals.grand}</span>
+                    <span className="text-xs text-slate-400">/ {MAX_TRUCK_CAPACITY} Boxes</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div className={`h-full rounded-full transition-all duration-700 ${cap > 90 ? 'bg-red-500' : 'bg-indigo-500'}`} style={{ width: `${cap}%` }}></div>
+                  </div>
+                  <div className={`mt-2 text-xs font-bold ${cap > 90 ? 'text-red-500' : 'text-green-600'}`}>{cap}% Full</div>
+                </div>
+
+                {/* Weather */}
+                <div className="bg-white rounded-xl p-5 border border-slate-100 shadow-sm">
+                  <div className="text-xs font-bold text-slate-500 uppercase mb-2">🌡 Dest. Weather</div>
+                  <div className="flex items-center gap-3 mt-1">
+                    <span className="text-4xl">{w.icon}</span>
+                    <div>
+                      <div className="text-2xl font-black text-slate-900">{w.temp}</div>
+                      <div className="text-xs text-slate-500">{w.cond}</div>
+                    </div>
+                  </div>
+                  {w.alert && <div className="mt-2 text-[10px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded">{w.alert}</div>}
+                </div>
+
+                {/* Info cards */}
+                {[
+                  { icon: '🚛', label: 'Vehicle', value: localDetails.vehicleNo },
+                  { icon: '💸', label: 'Transport Advance', value: `₹${(localDetails.transportAdvance || 0).toLocaleString()}` },
+                  { icon: '👤', label: 'Driver Contact', value: localDetails.driverContact },
+                  { icon: '🏪', label: 'Customer / DT', value: localDetails.dtName || '— Not set' },
+                  { icon: '💼', label: 'Supplier', value: localDetails.supplier },
+                ].map(c => (
+                  <div key={c.label} className="flex items-center gap-3 p-3 rounded-lg border border-slate-100 bg-white">
+                    <span className="text-2xl">{c.icon}</span>
+                    <div>
+                      <div className="text-[10px] font-bold text-slate-400 uppercase">{c.label}</div>
+                      <div className="text-sm font-bold text-slate-800 truncate max-w-[140px]">{c.value}</div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Track button */}
+                <a href={trip.details.liveUrl} target="_blank" rel="noreferrer"
+                  className={`lg:col-span-4 flex items-center justify-center gap-2 bg-slate-900 hover:bg-emerald-600 text-white font-bold text-sm py-4 rounded-xl transition-all shadow-md ${trip.details.liveUrl === '#' ? 'opacity-50 pointer-events-none' : ''}`}>
+                  🧭 Track Live Location
+                </a>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'market' && (
+            <div className="space-y-6 fade-in">
+              {/* Market Reception & Sales content ... (I will keep the existing logic but fix the wrappers) */}
+              {/* Sticky floating save button */}
+              {activeTab === 'market' && (
+                <div className="save-float">
+                  <button onClick={saveMarketData} disabled={saving}
+                    className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-sm px-5 py-3 rounded-2xl shadow-xl transition-all disabled:opacity-50 flex items-center gap-2">
+                    {saving ? <><span className="animate-spin inline-block">↻</span> Saving…</> : '💾 Save Market Data'}
+                  </button>
+                </div>
+              )}
+
+              {/* Auto status bump prompt */}
+              {showStatusPrompt && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3 fade-in">
+                  <p className="text-sm font-bold text-amber-800">🎉 Sales rates saved! Mark this trip as <span className="text-emerald-700">Sales Completed</span>?</p>
+                  <div className="flex gap-2 flex-shrink-0">
+                    <button onClick={() => setShowStatusPrompt(false)} className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">Later</button>
+                    <button onClick={async () => {
+                      setShowStatusPrompt(false);
+                      const { error } = await supabase.from('trades').update({ status: 'SALES_COMPLETED' }).eq('trip_id', localDetails.tripId);
+                      if (!error) {
+                        const updated = { ...localDetails, status: 'SALES_COMPLETED' };
+                        setLocalDetails(updated);
+                        setEditData(d => ({ ...d, status: 'SALES_COMPLETED' }));
+                        onUpdate(localDetails.tripId, updated);
+                        setSaveMsg('✓ Status updated to Sales Completed');
+                        setTimeout(() => setSaveMsg(''), 3000);
+                      }
+                    }} className="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg">Yes, Mark Complete</button>
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-md">
+                {/* ... existing market content ... */}
+                <div className="lg:col-span-3 space-y-6 fade-in">
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-md p-6">
+                    <div className="flex items-center justify-between mb-6">
+                      <div>
+                        <h2 className="text-lg font-black text-slate-900 leading-tight">📍 Market Reception & Sales</h2>
+                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-0.5">Enter actual arrival stock and sales rates</p>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="border-b border-slate-100 text-[10px] uppercase font-black text-slate-400 tracking-wider">
+                            <th className="py-3 px-2">Brand / Grade</th>
+                            <th className="py-3 px-2 text-center bg-slate-50 rounded-t-lg">Manifest</th>
+                            <th className="py-3 px-2 text-center bg-emerald-50 text-emerald-700 rounded-t-lg">Received</th>
+                            <th className="py-3 px-2 text-center">Diff.</th>
+                            {showSales && (
+                              <>
+                                <th className="py-3 px-2 text-center bg-blue-50 text-blue-700 rounded-t-lg italic">Sales Rate (₹)</th>
+                                <th className="py-3 px-2 text-right">Raw Total</th>
+                              </>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50 text-sm">
+                          {trip.marks.map(m => (
+                            <React.Fragment key={m.id}>
+                              <tr className="bg-slate-50/50">
+                                <td colSpan="6" className="py-1.5 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">{m.name}</td>
+                              </tr>
+                              {trip.gradeColumns.map(grade => {
+                                const v = m.grades[grade];
+                                if (!v) return null;
+                                const data = itemData[v.id] || { received: v.received || '', rate: v.rate || '' };
+                                const diff = (parseInt(data.received) || 0) - v.manifest;
+                                const rowTotal = (parseInt(data.received) || 0) * (parseFloat(data.rate) || 0);
+
+                                // Variance alert: received < manifest by >5%
+                                const shortage = v.manifest > 0 ? (v.manifest - (parseInt(data.received) || 0)) / v.manifest : 0;
+                                const isShortage = shortage > 0.05 && (parseInt(data.received) || 0) > 0;
+                                const isBigShortage = shortage > 0.2 && (parseInt(data.received) || 0) > 0;
+
+                                return (
+                                  <tr key={v.id} className={`transition-colors ${isBigShortage ? 'bg-red-50 hover:bg-red-100' : isShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-slate-50/50'}`}>
+                                    <td className="py-2.5 px-2 font-bold text-slate-700">{grade}</td>
+                                    <td className="py-2.5 px-2 text-center font-mono font-bold text-slate-400">{v.manifest}</td>
+                                    <td className="py-2.5 px-2 text-center bg-emerald-50/30">
+                                      <input type="number" value={data.received}
+                                        onChange={e => setItem(v.id, 'received', e.target.value)}
+                                        placeholder="0"
+                                        className="w-16 h-8 text-center text-sm font-black text-emerald-700 bg-white border border-emerald-200 rounded focus:border-emerald-500 focus:outline-none" />
+                                    </td>
+                                    <td className="py-2.5 px-2 text-center">
+                                      <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${diff < 0 ? 'bg-red-50 text-red-600' : diff > 0 ? 'bg-amber-50 text-amber-600' : 'text-slate-300'}`}>
+                                        {diff === 0 ? '--' : (diff > 0 ? `+${diff}` : diff)}
+                                      </span>
+                                    </td>
+                                    {showSales && (
+                                      <>
+                                        <td className="py-2.5 px-2 text-center bg-blue-50/30">
+                                          <input type="number" value={data.rate}
+                                            onChange={e => setItem(v.id, 'rate', e.target.value)}
+                                            placeholder="0.00"
+                                            className="w-20 h-8 text-center text-sm font-black text-blue-700 bg-white border border-blue-200 rounded focus:border-blue-500 focus:outline-none placeholder:text-blue-200" />
+                                        </td>
+                                        <td className="py-2.5 px-2 text-right font-mono font-bold text-slate-900">
+                                          {rowTotal > 0 ? `₹${rowTotal.toLocaleString()}` : '--'}
+                                        </td>
+                                      </>
+                                    )}
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {showSales && (
+                      <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-6 border-t border-slate-100">
+                        <div className="lg:col-span-1 space-y-3">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Trip Logistics & Charges</label>
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                              <span className="text-xs font-bold text-slate-500">Freight (₹)</span>
+                              <input type="number" value={expenses.freight} onChange={e => setExpenses(ex => ({ ...ex, freight: e.target.value }))}
+                                className="w-24 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
+                            </div>
+                            <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                              <span className="text-xs font-bold text-slate-500">Coolie (₹)</span>
+                              <input type="number" value={expenses.coolie} onChange={e => setExpenses(ex => ({ ...ex, coolie: e.target.value }))}
+                                className="w-24 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
+                            </div>
+                            <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 text-blue-700">
+                              <span className="text-xs font-bold opacity-70">DT Commission (₹)</span>
+                              <input type="number" value={expenses.commission} onChange={e => setExpenses(ex => ({ ...ex, commission: e.target.value }))}
+                                className="w-24 h-7 text-right text-xs font-bold border border-blue-200 rounded px-1.5 focus:outline-none focus:border-blue-300 text-blue-700" />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="lg:col-span-2 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Other Charges</label>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-bold text-slate-400 italic">specify:</span>
+                              <input type="text" value={expenses.note} onChange={e => setExpenses(ex => ({ ...ex, note: e.target.value }))}
+                                placeholder="e.g. Loading surcharge"
+                                className="w-40 h-7 text-xs border rounded-lg px-2 focus:outline-none focus:border-emerald-300" />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                            <span className="text-xs font-bold text-slate-500">Amount (₹)</span>
+                            <input type="number" value={expenses.other} onChange={e => setExpenses(ex => ({ ...ex, other: e.target.value }))}
+                              className="w-40 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
+                          </div>
+                          <div className="p-3 bg-amber-50/50 rounded-lg border border-amber-100 mt-2">
+                            <p className="text-[10px] text-amber-700 font-bold leading-tight">
+                              💡 Total realization reflects Gross Sales minus all above charges (Freight, Collie, Comm., Other).
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900 text-white rounded-xl p-4 shadow-lg text-right flex flex-col justify-center">
+                          <p className="text-[10px] font-bold uppercase opacity-60 tracking-widest">Est. Net Realization</p>
+                          <h4 className="text-2xl font-black text-emerald-400">₹ {totals.net.toLocaleString()}</h4>
+                          {totals.netPerBox > 0 && <p className="text-[11px] text-emerald-300 font-bold mt-1">₹ {totals.netPerBox.toLocaleString()} / box</p>}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Trip Notes */}
+                    <div className="mt-6 pt-5 border-t border-slate-100">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">📝 Trip Notes</label>
+                      <textarea
+                        value={tripNotes}
+                        onChange={e => setTripNotes(e.target.value)}
+                        placeholder="Market conditions, special instructions, delays…"
+                        rows={2}
+                        className="w-full px-3 py-2 text-sm text-slate-700 border border-slate-200 rounded-xl focus:border-emerald-400 focus:outline-none resize-none bg-slate-50"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {
+            activeTab === 'manifest' && (
+              <div className="space-y-6 fade-in">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                  {/* Manifest */}
+                  <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                      <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">📋 Manifest Details</h2>
+                      <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full">
+                        Total: {totals.grand} Boxes
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 text-xs text-slate-500 font-bold uppercase border-b border-slate-200">
+                            <th className="px-5 py-3 sticky left-0 bg-slate-50 border-r border-slate-200">Grade / Variety</th>
+                            {trip.marks.map(m => <th key={m.id} className="px-5 py-3 text-center min-w-[90px]">{m.name}</th>)}
+                            <th className="px-5 py-3 text-right sticky right-0 bg-slate-50 border-l border-slate-200">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {trip.marks.length === 0
+                            ? <tr><td colSpan={trip.marks.length + 2} className="px-5 py-10 text-center text-slate-400 text-sm">No manifest data</td></tr>
+                            : trip.gradeColumns.map(grade => (
+                              <tr key={grade} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-5 py-3 font-bold text-slate-700 border-r border-slate-100 sticky left-0 bg-white">{grade}</td>
+                                {trip.marks.map(m => (
+                                  <td key={m.id + grade} className="px-5 py-3 text-center">
+                                    {m.grades[grade]
+                                      ? <span className="font-semibold text-slate-700">{m.grades[grade].manifest}</span>
+                                      : <span className="text-slate-200">•</span>}
+                                  </td>
+                                ))}
+                                <td className="px-5 py-3 text-right font-black text-slate-800 border-l border-slate-100 sticky right-0 bg-white">{totals[grade] || 0}</td>
+                              </tr>
+                            ))
+                          }
+                        </tbody>
+                        {trip.marks.length > 0 && (
+                          <tfoot className="border-t border-slate-200 bg-slate-50 font-bold">
+                            <tr>
+                              <td className="px-5 py-3 text-xs uppercase text-slate-500 sticky left-0 bg-slate-50 border-r border-slate-200">Totals</td>
+                              {trip.marks.map(m => (
+                                <td key={m.id} className="px-5 py-3 text-center text-emerald-700 font-black">
+                                  {Object.values(m.grades).reduce((a, b) => a + (b.manifest || 0), 0)}
+                                </td>
+                              ))}
+                              <td className="px-5 py-3 text-right text-slate-900 font-black text-base sticky right-0 bg-slate-50 border-l border-slate-200">{totals.grand}</td>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Load plan */}
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                    <div className="px-6 py-4 border-b border-slate-100">
+                      <h2 className="text-sm font-bold text-slate-800">🚛 Load Plan</h2>
+                    </div>
+                    <div className="p-4 flex flex-col items-center flex-1 bg-slate-50/30">
+                      <div className="relative w-full max-w-[200px] flex flex-col my-4">
+                        <div className="h-10 mx-4 bg-gradient-to-b from-slate-700 to-slate-800 rounded-t-xl shadow-lg"></div>
+                        <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[280px]">
+                          {trip.loadingZones.length === 0
+                            ? <div className="flex-1 flex items-center justify-center text-slate-300 text-xs border-2 border-dashed border-slate-200 rounded m-1">No Load Data</div>
+                            : trip.loadingZones.map(z => (
+                              <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} ${z.border} flex flex-col items-center justify-center text-center`}>
+                                <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text}`}>{z.name}</span>
+                                <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{z.description}</span>
+                                <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
+                              </div>
+                            ))
+                          }
+                        </div>
+                        <div className="absolute -right-2 top-14 w-2 h-8 bg-black rounded-r"></div>
+                        <div className="absolute -left-2 top-14 w-2 h-8 bg-black rounded-l"></div>
+                        <div className="absolute -right-2 bottom-10 w-2 h-8 bg-black rounded-r"></div>
+                        <div className="absolute -left-2 bottom-10 w-2 h-8 bg-black rounded-l"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Media Gallery */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                    <h2 className="text-sm font-bold text-slate-800">🎥 Trip Media</h2>
+                    <div>
+                      <input type="file" accept="video/*,image/*" ref={fileRef} onChange={addVideo} className="hidden" />
+                      <button onClick={() => fileRef.current?.click()}
+                        className="flex items-center gap-1.5 text-xs font-bold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
+                        + Upload
+                      </button>
+                    </div>
+                  </div>
+                  <div className="p-6">
+                    {videos.length === 0
+                      ? <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl">
+                        <div className="text-3xl mb-2">📤</div>
+                        <p className="text-sm font-bold text-slate-600">No Media Uploaded</p>
+                        <p className="text-xs text-slate-400 mt-1">Upload packing videos or loading proofs</p>
+                      </div>
+                      : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                        {videos.map(v => (
+                          <div key={v.id} className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video group">
+                            <video src={v.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" controls />
+                            <button onClick={() => setVideos(vs => vs.filter(x => x.id !== v.id))}
+                              className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full hover:bg-red-500 opacity-0 group-hover:opacity-100 transition-all">✕</button>
+                            <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent pointer-events-none">
+                              <p className="text-xs font-bold text-white truncate">{v.title}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    }
+                  </div>
+                </div>
+              </div>
+            )}
+        </div>
+      );
+    }
+
+    // ─── MULTI-SELECT DROPDOWN ────────────────────────────────
+    function MultiSelect({ options, selected, onChange, placeholder }) {
+      const [open, setOpen] = React.useState(false);
+      const ref = React.useRef(null);
+      React.useEffect(() => {
+        const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+      }, []);
+      const toggle = val => onChange(selected.includes(val) ? selected.filter(v => v !== val) : [...selected, val]);
+      const allSelected = selected.length === options.length && options.length > 0;
+      const toggleAll = () => onChange(allSelected ? [] : options.map(o => o.value));
+      const count = selected.length;
+      return (
+        <div ref={ref} className="relative">
+          <button onClick={() => setOpen(o => !o)}
+            className={`h-10 px-3 flex items-center gap-2 rounded-lg border text-sm font-bold transition-all min-w-[140px] cursor-pointer
+              ${count > 0 ? 'border-emerald-400 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-300'}`}>
+            <span className="flex-1 text-left truncate">
+              {count === 0 ? placeholder : count === options.length ? `All ${placeholder.replace('All ', '')}` : count === 1 ? options.find(o => o.value === selected[0])?.label || selected[0] : `${count} selected`}
+            </span>
+            {count > 0 && (
+              <span onClick={e => { e.stopPropagation(); onChange([]); }}
+                className="w-4 h-4 rounded-full bg-emerald-200 text-emerald-700 text-[10px] flex items-center justify-center hover:bg-red-200 hover:text-red-700 flex-shrink-0 font-black">
+                ×
+              </span>
+            )}
+            <span className="text-slate-400 text-[10px] flex-shrink-0">{open ? '▲' : '▼'}</span>
+          </button>
+          {open && (
+            <div className="absolute top-12 left-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl min-w-[180px] max-h-64 overflow-y-auto py-1 fade-in">
+              {/* Select All row */}
+              {options.length > 1 && (
+                <label className="flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 cursor-pointer border-b border-slate-100 mb-1">
+                  <input type="checkbox" checked={allSelected} onChange={toggleAll}
+                    className="w-3.5 h-3.5 accent-emerald-600 flex-shrink-0" />
+                  <span className="text-xs font-black text-slate-500 uppercase tracking-wide">{allSelected ? 'Deselect All' : 'Select All'}</span>
+                </label>
+              )}
+              {options.map(opt => (
+                <label key={opt.value} className="flex items-center gap-2.5 px-3 py-2 hover:bg-slate-50 cursor-pointer">
+                  <input type="checkbox" checked={selected.includes(opt.value)} onChange={() => toggle(opt.value)}
+                    className="w-3.5 h-3.5 accent-emerald-600 flex-shrink-0" />
+                  <span className="text-sm font-semibold text-slate-700">{opt.label}</span>
+                </label>
+              ))}
+              {options.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">No options</p>}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── DATE MULTI-PICKER (Single + Range tabs) ──────────────────────
+    function DateMultiPicker({ selected, onChange }) {
+      const [open, setOpen] = React.useState(false);
+      const [mode, setMode] = React.useState('single'); // 'single' | 'range'
+      const [singleVal, setSingleVal] = React.useState('');
+      const [rangeFrom, setRangeFrom] = React.useState('');
+      const [rangeTo, setRangeTo] = React.useState('');
+      const ref = React.useRef(null);
+      React.useEffect(() => {
+        const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+      }, []);
+
+      const addDate = val => { if (val && !selected.includes(val)) onChange([...selected, val]); setSingleVal(''); };
+      const removeDate = val => onChange(selected.filter(d => d !== val));
+
+      const addRange = () => {
+        if (!rangeFrom || !rangeTo) return;
+        const from = new Date(rangeFrom), to = new Date(rangeTo);
+        if (from > to) return;
+        const dates = [];
+        for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+          const iso = d.toISOString().slice(0, 10);
+          if (!selected.includes(iso)) dates.push(iso);
+        }
+        onChange([...selected, ...dates]);
+        setRangeFrom(''); setRangeTo('');
+      };
+
+      const count = selected.length;
+      return (
+        <div ref={ref} className="relative">
+          <button onClick={() => setOpen(o => !o)}
+            className={`h-10 px-3 flex items-center gap-2 rounded-lg border text-sm font-bold transition-all min-w-[140px] cursor-pointer
+              ${count > 0 ? 'border-emerald-400 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600 hover:border-emerald-300'}`}>
+            <span className="flex-1 text-left">
+              {count === 0 ? 'All Dates' : count === 1 ? fmtDate(selected[0]) : `${count} dates`}
+            </span>
+            {count > 0 && (
+              <span onClick={e => { e.stopPropagation(); onChange([]); }}
+                className="w-4 h-4 rounded-full bg-emerald-200 text-emerald-700 text-[10px] flex items-center justify-center hover:bg-red-200 hover:text-red-700 flex-shrink-0 font-black">
+                ×
+              </span>
+            )}
+            <span className="text-slate-400 text-[10px]">{open ? '▲' : '▼'}</span>
+          </button>
+          {open && (
+            <div className="absolute top-12 left-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl min-w-[230px] py-2 fade-in">
+              {/* Mode tabs */}
+              <div className="flex px-2 gap-1 pb-2">
+                {['single', 'range'].map(m => (
+                  <button key={m} onClick={() => setMode(m)}
+                    className={`flex-1 py-1 text-xs font-bold rounded-lg transition-all
+                      ${mode === m ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
+                    {m === 'single' ? 'Single Date' : 'Date Range'}
+                  </button>
+                ))}
+              </div>
+              {mode === 'single' ? (
+                <div className="px-2 pb-1">
+                  <input type="date" value={singleVal} onChange={e => setSingleVal(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && addDate(singleVal)}
+                    className="w-full h-8 px-2 text-xs border border-slate-200 rounded-lg focus:border-emerald-400 outline-none" />
+                  <button onClick={() => addDate(singleVal)} disabled={!singleVal}
+                    className="mt-1 w-full h-7 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 disabled:opacity-40">+ Add Date</button>
+                </div>
+              ) : (
+                <div className="px-2 pb-1 space-y-1">
+                  <div className="grid grid-cols-2 gap-1">
+                    <div>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">From</p>
+                      <input type="date" value={rangeFrom} onChange={e => setRangeFrom(e.target.value)}
+                        className="w-full h-8 px-2 text-xs border border-slate-200 rounded-lg focus:border-emerald-400 outline-none" />
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">To</p>
+                      <input type="date" value={rangeTo} min={rangeFrom} onChange={e => setRangeTo(e.target.value)}
+                        className="w-full h-8 px-2 text-xs border border-slate-200 rounded-lg focus:border-emerald-400 outline-none" />
+                    </div>
+                  </div>
+                  <button onClick={addRange} disabled={!rangeFrom || !rangeTo || rangeFrom > rangeTo}
+                    className="w-full h-7 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 disabled:opacity-40">
+                    + Add Range
+                  </button>
+                </div>
+              )}
+              {selected.length > 0 && (
+                <div className="border-t border-slate-100 mt-1 pt-1 max-h-36 overflow-y-auto">
+                  {selected.sort().map(d => (
+                    <div key={d} className="flex items-center justify-between px-3 py-1 hover:bg-slate-50">
+                      <span className="text-xs font-semibold text-slate-700">{fmtDate(d)}</span>
+                      <button onClick={() => removeDate(d)} className="text-red-400 hover:text-red-600 text-xs font-black">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── MAIN APP ─────────────────────────────────────────────────
+    function App() {
+      const [tab, setTab] = useState('fleet');
+      const [allTrips, setAllTrips] = useState([]);
+      const [selectedId, setSelectedId] = useState(null);
+      const [filterDates, setFilterDates] = useState([]);
+      const [filterMarkets, setFilterMarkets] = useState([]);
+      const [filterStatuses, setFilterStatuses] = useState([]);
+      const [syncing, setSyncing] = useState(false);
+      const [error, setError] = useState(null);
+      const [lastSynced, setLastSynced] = useState(null);
+      const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+      useEffect(() => {
+        const up = () => setIsOnline(true);
+        const down = () => setIsOnline(false);
+        window.addEventListener('online', up);
+        window.addEventListener('offline', down);
+        return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+      }, []);
+
+      const currentTrip = allTrips.find(t => t.details.tripId === selectedId) || allTrips[0];
+
+      const handleTripUpdate = useCallback((tripId, updatedDetails) => {
+        setAllTrips(prev => prev.map(t =>
+          t.details.tripId === tripId ? { ...t, details: updatedDetails } : t
+        ));
+      }, []);
+
+      const sync = useCallback(async () => {
+        setSyncing(true); setError(null);
+        try {
+          const { data: trades, error: e1 } = await supabase
+            .from('trades').select('*').neq('status', 'CLOSED').order('dispatch_date', { ascending: false });
+          if (e1) throw e1;
+          if (!trades?.length) { setAllTrips([]); throw new Error('No active trades found.'); }
+
+          const ids = trades.map(t => t.trip_id);
+          const [mfstRes, expRes] = await Promise.all([
+            supabase.from('trade_manifest').select('*').in('trip_id', ids),
+            supabase.from('expenses').select('*').in('trip_id', ids)
+          ]);
+
+          if (mfstRes.error) throw mfstRes.error;
+          if (expRes.error) throw expRes.error;
+
+          const processed = processTrips(trades, mfstRes.data || [], expRes.data || []);
+          setAllTrips(processed);
+          setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        } catch (err) {
+          setError(err.message || 'Sync failed.');
+        } finally { setSyncing(false); }
+      }, []);
+
+      useEffect(() => { sync(); }, []);
+
+      const markets = useMemo(() => {
+        const set = new Set(allTrips.map(t => t.details.destination).filter(d => d && d !== '--'));
+        return Array.from(set).sort();
+      }, [allTrips]);
+
+      const filtered = useMemo(() => {
+        return allTrips.filter(t => {
+          const matchDate = filterDates.length ? filterDates.includes(t.details.dispatchDate) : true;
+          const matchMarket = filterMarkets.length ? filterMarkets.includes(t.details.destination) : true;
+          const matchStatus = filterStatuses.length ? filterStatuses.includes(t.details.status) : true;
+          return matchDate && matchMarket && matchStatus;
+        });
+      }, [allTrips, filterDates, filterMarkets, filterStatuses]);
+
+      return (
+        <div className="min-h-screen bg-[#F8FAFC] pb-10">
+
+          {/* Navbar */}
+          <nav className="bg-white border-b border-slate-200 sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-4 flex items-center justify-between h-16">
+              <div onClick={() => setTab('fleet')} className="flex items-center gap-3 cursor-pointer">
+                <div className="bg-emerald-600 text-white w-9 h-9 rounded-lg flex items-center justify-center text-lg shadow-sm">📦</div>
+                <div>
+                  <div className="font-black text-lg leading-none text-slate-900">NinjaTrack</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Logistics</div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {!isOnline && (
+                  <span className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-50 border border-red-200 px-2.5 py-1 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse-dot inline-block"></span> Offline
+                  </span>
+                )}
+                {lastSynced && isOnline && <span className="text-xs text-slate-400 hidden sm:block">Synced {lastSynced}</span>}
+                <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
+                  {['fleet', 'view'].map(t => (
+                    <button key={t} onClick={() => {
+                      if (t === 'view' && allTrips.length > 0) { if (!selectedId) setSelectedId(allTrips[0].details.tripId); }
+                      setTab(t);
+                    }}
+                      disabled={t === 'view' && allTrips.length === 0}
+                      className={`px-3 py-1.5 rounded-md text-sm font-bold transition-all capitalize
+                        ${tab === t ? 'bg-white text-slate-900 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}
+                        ${t === 'view' && allTrips.length === 0 ? 'opacity-40 cursor-not-allowed' : ''}`}>
+                      {t === 'fleet' ? '⊞ Fleet' : '≡ Detail'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </nav>
+
+          {/* Main */}
+          <main className="max-w-7xl mx-auto px-4">
+
+            {tab === 'fleet' && (
+              <div className="space-y-6 pt-6 fade-in">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
+                  <div>
+                    <h2 className="text-3xl font-black text-slate-900">Fleet Overview</h2>
+                    <p className="text-slate-400 mt-1 text-sm">Active dispatches</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto mt-4 sm:mt-0">
+                    <button
+                      onClick={() => { setFilterDates([]); setFilterMarkets([]); setFilterStatuses([]); }}
+                      style={{ visibility: (filterDates.length || filterMarkets.length || filterStatuses.length) ? 'visible' : 'hidden' }}
+                      className="text-xs font-bold text-red-500 hover:text-red-700 px-2 py-1 bg-red-50 rounded-lg border border-red-100 transition-colors h-10">
+                      ✕ Clear All
+                    </button>
+
+                    <DateMultiPicker selected={filterDates} onChange={setFilterDates} />
+
+                    <MultiSelect
+                      placeholder="All Markets"
+                      options={markets.map(m => ({ value: m, label: m }))}
+                      selected={filterMarkets}
+                      onChange={setFilterMarkets}
+                    />
+
+                    <MultiSelect
+                      placeholder="All Statuses"
+                      options={STATUSES.map(s => ({ value: s.value, label: s.label }))}
+                      selected={filterStatuses}
+                      onChange={setFilterStatuses}
+                    />
+
+                    <div className="bg-white px-3 py-2 h-10 flex items-center rounded-lg border border-slate-200 text-sm font-semibold whitespace-nowrap">
+                      Found: <span className="text-emerald-600 ml-1">{filtered.length}</span>
+                    </div>
+
+
+
+                    <button onClick={sync} disabled={syncing}
+                      className={`flex items-center gap-1.5 h-10 px-4 py-2 rounded-lg text-sm font-bold border transition-all ${syncing ? 'bg-slate-50 text-slate-400 border-slate-200' : 'bg-slate-900 text-white hover:bg-emerald-600 border-transparent shadow-md'}`}>
+                      <span className={syncing ? 'animate-spin inline-block' : 'inline-block'}>↻</span>
+                      {syncing ? 'Syncing…' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-sm font-bold">
+                    ⚠️ {error}
+                  </div>
+                )}
+
+                {syncing && allTrips.length === 0
+                  ? <div className="flex flex-col items-center py-24 text-slate-400">
+                    <span className="text-4xl animate-spin inline-block mb-4">↻</span>
+                    <p className="font-bold">Connecting to Supabase…</p>
+                  </div>
+                  : filtered.length === 0
+                    ? <div className="flex flex-col items-center py-24 bg-white rounded-2xl border border-dashed border-slate-300">
+                      <span className="text-5xl mb-4">🚛</span>
+                      <h3 className="font-bold text-slate-700">No Active Trades Found</h3>
+                      <p className="text-sm text-slate-400 mt-1">Try refreshing or check your Supabase tables.</p>
+                    </div>
+                    : <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                      {filtered.map(t => (
+                        <FleetCard key={t.details.tripId} trip={t} onClick={() => { setSelectedId(t.details.tripId); setTab('view'); }} />
+                      ))}
+                    </div>
+                }
+              </div>
+            )}
+
+            {tab === 'view' && currentTrip && (
+              <DetailView
+                trip={currentTrip}
+                allTrips={allTrips}
+                onBack={() => setTab('fleet')}
+                onSwitch={id => setSelectedId(id)}
+                onUpdate={handleTripUpdate}
+              />
+            )}
+
+          </main>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+
+</html>
