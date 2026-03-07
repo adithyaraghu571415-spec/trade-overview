@@ -189,6 +189,7 @@
             origin: trade.source_location || '--',
             destination: trade.destination_market || '--',
             dispatchDate: trade.dispatch_date || '',
+            dispatchTime: trade.dispatch_time || '',
             eta: trade.arrival_date || '',
             status: ['CREATED', 'DISPATCHED', 'IN_TRANSIT'].includes(trade.status) ? 'IN_TRANSIT' : trade.status || 'IN_TRANSIT',
             liveUrl: trade.tracking_link || '#',
@@ -250,7 +251,8 @@
 
     // ─── QUICK STATUS PICKER ───────────────────────────────────
     // Inline 2-click status changer: click badge → pick new status → auto-saves
-    function QuickStatusPicker({ currentStatus, tripId, onSaved, setSaveMsg }) {
+    function QuickStatusPicker({ tripDetails, onSaved, setSaveMsg, onRequestEdit }) {
+      const { status: currentStatus, tripId, destination, eta, dtName } = tripDetails;
       const [open, setOpen] = React.useState(false);
       const [saving, setSaving] = React.useState(false);
       const ref = React.useRef(null);
@@ -262,6 +264,22 @@
 
       const pick = async (newStatus) => {
         if (newStatus === currentStatus) { setOpen(false); return; }
+
+        const needsDest = ['REACHED_MARKET', 'SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(newStatus);
+        const needsDt = ['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(newStatus);
+
+        const missing = [];
+        if (needsDest && !destination?.trim()) missing.push('Destination Market');
+        if (needsDest && !eta) missing.push('Arrival Date');
+        if (needsDt && !dtName?.trim()) missing.push('DT Name');
+
+        if (missing.length > 0) {
+          setOpen(false);
+          setSaveMsg(`❌ Required: ${missing[0]}`);
+          if (onRequestEdit) onRequestEdit(newStatus);
+          return;
+        }
+
         setSaving(true);
         try {
           const { error } = await supabase.from('trades').update({ status: toDbStatus(newStatus) }).eq('trip_id', tripId);
@@ -385,7 +403,7 @@
       });
       const [tripNotes, setTripNotes] = useState(trip.details.notes || '');
 
-      const [activeTab, setActiveTab] = useState('dashboard');
+      const [activeTab, setActiveTab] = useState(['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(trip.details.status) ? 'market' : 'dashboard');
 
       // Item data state: { manifest_id: { received, rate } }
       const [itemData, setItemData] = useState({});
@@ -418,6 +436,7 @@
         setTripNotes(trip.details.notes || '');
         setShowStatusPrompt(false);
         setEditing(false); setSaveMsg('');
+        setActiveTab(['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(trip.details.status) ? 'market' : 'dashboard');
       }, [trip.details.tripId]);
 
       const w = weatherFor(localDetails.destination);
@@ -608,9 +627,9 @@
                 </div>
                 <div className="flex items-center gap-2.5">
                   <QuickStatusPicker
-                    currentStatus={localDetails.status}
-                    tripId={localDetails.tripId}
+                    tripDetails={localDetails}
                     setSaveMsg={setSaveMsg}
+                    onRequestEdit={(targetStatus) => { setEditing(true); if (targetStatus) setEditData(d => ({ ...d, status: targetStatus })); }}
                     onSaved={newStatus => {
                       const updated = { ...localDetails, status: newStatus };
                       setLocalDetails(updated);
@@ -638,13 +657,43 @@
                         {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                     </div>
-                    <div>
+                    <div className="relative">
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
                         Destination Market {['REACHED_MARKET', 'SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
                       </label>
-                      <input type="text" value={editData.destination} onChange={e => setEdit('destination', e.target.value)}
-                        placeholder="e.g. Chennai"
-                        className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                      {/* Custom dropdown */}
+                      {(() => {
+                        const DEST_OPTIONS = ['Bengaluru', 'Chennai', 'Hyderabad', 'Madurai', 'Panruti', 'Cochin', 'Coimbatore', 'Trichy'];
+                        return (
+                          <div className="relative" onBlur={e => {
+                            if (!e.currentTarget.contains(e.relatedTarget)) setEdit('destFocus', false);
+                          }}>
+                            <input type="text"
+                              value={editData.destination || ''}
+                              onChange={e => setEdit('destination', e.target.value)}
+                              onFocus={() => { setEdit('destFocus', true); }}
+                              placeholder="e.g. Chennai"
+                              className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                            {editData.destFocus && (
+                              <div className="absolute top-11 left-0 w-full bg-white border border-slate-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto pop-in">
+                                {DEST_OPTIONS.map(d => (
+                                  <button key={d} type="button"
+                                    onClick={() => { setEdit('destination', d); setEdit('destFocus', false); }}
+                                    className="w-full text-left px-3 py-2 text-sm font-medium text-slate-700 hover:bg-amber-50 cursor-pointer border-b border-slate-50 last:border-0"
+                                  >
+                                    {d}
+                                  </button>
+                                ))}
+                                {editData.destination && !DEST_OPTIONS.includes(editData.destination) && (
+                                  <div className="px-3 py-2 text-xs text-slate-400 italic bg-slate-50 border-t border-slate-100">
+                                    Custom market: <strong>{editData.destination}</strong> (Hit save)
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
@@ -684,11 +733,16 @@
 
               {/* Tab Navigation */}
               <div className="flex border-b border-slate-100 mt-2 -mx-6 lg:-mx-8 px-6 lg:px-8">
-                {[
-                  { id: 'dashboard', label: '📊 Dashboard', count: null },
-                  { id: 'market', label: '🛒 Market & Sales', count: null },
-                  { id: 'manifest', label: '📋 Manifest', count: totals.grand },
-                ].map(t => (
+                {(showSales
+                  ? [
+                    { id: 'market', label: '🛒 Market & Sales', count: null },
+                    { id: 'dashboard', label: '📊 Dashboard', count: null },
+                  ]
+                  : [
+                    { id: 'dashboard', label: '📊 Dashboard', count: null },
+                    { id: 'market', label: '🛒 Market & Sales', count: null },
+                  ]
+                ).map(t => (
                   <button key={t.id} onClick={() => setActiveTab(t.id)}
                     className={`px-4 py-3 text-xs font-black uppercase tracking-widest transition-all border-b-2
                       ${activeTab === t.id ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
@@ -727,78 +781,222 @@
 
               {/* Grid */}
 
-              {/* Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="space-y-3">
 
-                {/* Route */}
-                <div className="lg:col-span-2 bg-slate-50 rounded-xl p-5 border border-slate-100 relative overflow-hidden">
-                  <div className="text-xs font-bold text-slate-500 uppercase mb-3 flex items-center gap-1.5">📍 Route</div>
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <div className="font-bold text-slate-900">{localDetails.origin}</div>
-                      <div className="text-xs mt-1.5 bg-white px-2 py-1 rounded border border-slate-100 text-emerald-700 font-bold inline-flex items-center gap-1">
-                        📅 {fmtDate(localDetails.dispatchDate)}
+                {/* ── TOP SUMMARY CARD: Origin → Destination + Weather ── */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="grid grid-cols-1 lg:grid-cols-13 divide-y lg:divide-y-0 lg:divide-x divide-slate-100" style={{ gridTemplateColumns: '5fr 1fr 4fr 2fr' }}>
+
+                    {/* Left: Origin + Supplier */}
+                    <div className="p-5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Origin</div>
+                          <div className="text-xl font-black text-slate-900">{localDetails.origin}</div>
+                          <div className="text-xs font-semibold text-emerald-600 mt-1">
+                            📅 {fmtDate(localDetails.dispatchDate)}
+                            {localDetails.dispatchTime && <span className="ml-1.5 text-emerald-500 font-bold">{localDetails.dispatchTime}</span>}
+                          </div>
+                        </div>
+                        <div className="text-right min-w-0">
+                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Supplier</div>
+                          <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.supplier}>{localDetails.supplier}</div>
+                        </div>
                       </div>
                     </div>
-                    <div className="text-slate-300 text-xl">→</div>
-                    <div className="text-right">
-                      <div className="font-bold text-slate-900">{localDetails.destination}</div>
-                      <div className="text-xs mt-1.5 bg-white px-2 py-1 rounded border border-slate-100 text-slate-600 font-bold inline-flex items-center gap-1">
-                        {localDetails.eta ? fmtDate(localDetails.eta) : '—'} ⏱
+
+                    {/* Center Arrow */}
+                    <div className="flex items-center justify-center p-3 text-slate-200 text-2xl select-none">→</div>
+
+                    {/* Right: Customer + Destination */}
+                    <div className="p-5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Customer / DT</div>
+                          <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.dtName || '—'}>{localDetails.dtName || '—'}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Destination</div>
+                          <div className="text-xl font-black text-slate-900">{localDetails.destination}</div>
+                          <div className="text-xs font-semibold text-amber-600 mt-1">{localDetails.eta ? fmtDate(localDetails.eta) : '—'} ⏱</div>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Weather Square */}
+                    <div className="p-4 flex flex-col items-center justify-center gap-1 bg-slate-50">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Weather</div>
+                      <div className="text-3xl leading-none mt-1">{w.icon}</div>
+                      <div className="text-base font-black text-slate-900">{w.temp}</div>
+                      <div className="text-[9px] text-slate-500">{w.cond}</div>
+                    </div>
+
                   </div>
                 </div>
 
-                {/* Capacity */}
-                <div className="bg-white rounded-xl p-5 border border-slate-100 shadow-sm">
-                  <div className="text-xs font-bold text-slate-500 uppercase mb-2">📦 Utilization</div>
-                  <div className="flex justify-between items-end mb-1.5">
-                    <span className="text-2xl font-black text-slate-900">{totals.grand}</span>
-                    <span className="text-xs text-slate-400">/ {MAX_TRUCK_CAPACITY} Boxes</span>
-                  </div>
-                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-                    <div className={`h-full rounded-full transition-all duration-700 ${cap > 90 ? 'bg-red-500' : 'bg-indigo-500'}`} style={{ width: `${cap}%` }}></div>
-                  </div>
-                  <div className={`mt-2 text-xs font-bold ${cap > 90 ? 'text-red-500' : 'text-green-600'}`}>{cap}% Full</div>
-                </div>
+                {/* ── SECONDARY ROW: 3 even columns ── */}
+                <div className="grid grid-cols-3 gap-3 items-start">
 
-                {/* Weather */}
-                <div className="bg-white rounded-xl p-5 border border-slate-100 shadow-sm">
-                  <div className="text-xs font-bold text-slate-500 uppercase mb-2">🌡 Dest. Weather</div>
-                  <div className="flex items-center gap-3 mt-1">
-                    <span className="text-4xl">{w.icon}</span>
-                    <div>
-                      <div className="text-2xl font-black text-slate-900">{w.temp}</div>
-                      <div className="text-xs text-slate-500">{w.cond}</div>
+                  {/* Utilization */}
+                  <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">📦 Utilization</div>
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-base font-black text-slate-900">{totals.grand}</span>
+                      <span className="text-[10px] text-slate-400">/ {MAX_TRUCK_CAPACITY}</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-1 mt-1.5 overflow-hidden">
+                      <div className={`h-full rounded-full ${cap > 90 ? 'bg-red-500' : 'bg-indigo-400'}`} style={{ width: `${cap}%` }}></div>
+                    </div>
+                    <div className={`text-[9px] font-bold mt-1 ${cap > 90 ? 'text-red-500' : 'text-emerald-600'}`}>{cap}% Full</div>
+                  </div>
+
+                  {/* Vehicle + Driver */}
+                  <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-2">🚛 Vehicle & Driver</div>
+                    <div className="text-sm font-black text-slate-800">{localDetails.vehicleNo}</div>
+                    <div className="mt-1.5 pt-1.5 border-t border-slate-100">
+                      <div className="text-xs font-bold text-slate-700">{localDetails.driverName}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{localDetails.driverContact}</div>
                     </div>
                   </div>
-                  {w.alert && <div className="mt-2 text-[10px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded">{w.alert}</div>}
+
+                  {/* Track */}
+                  <a href={trip.details.liveUrl} target="_blank" rel="noreferrer"
+                    className={`flex items-center justify-center gap-2 bg-slate-800 hover:bg-emerald-600 text-white rounded-xl py-4 text-sm font-bold transition-all shadow-sm ${trip.details.liveUrl === '#' ? 'opacity-50 pointer-events-none' : ''}`}>
+                    🧭 Track
+                  </a>
+
                 </div>
 
-                {/* Info cards */}
-                {[
-                  { icon: '🚛', label: 'Vehicle', value: localDetails.vehicleNo },
-                  { icon: '💸', label: 'Transport Advance', value: `₹${(localDetails.transportAdvance || 0).toLocaleString()}` },
-                  { icon: '👤', label: 'Driver Contact', value: localDetails.driverContact },
-                  { icon: '🏪', label: 'Customer / DT', value: localDetails.dtName || '— Not set' },
-                  { icon: '💼', label: 'Supplier', value: localDetails.supplier },
-                ].map(c => (
-                  <div key={c.label} className="flex items-center gap-3 p-3 rounded-lg border border-slate-100 bg-white">
-                    <span className="text-2xl">{c.icon}</span>
-                    <div>
-                      <div className="text-[10px] font-bold text-slate-400 uppercase">{c.label}</div>
-                      <div className="text-sm font-bold text-slate-800 truncate max-w-[140px]">{c.value}</div>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Track button */}
-                <a href={trip.details.liveUrl} target="_blank" rel="noreferrer"
-                  className={`lg:col-span-4 flex items-center justify-center gap-2 bg-slate-900 hover:bg-emerald-600 text-white font-bold text-sm py-4 rounded-xl transition-all shadow-md ${trip.details.liveUrl === '#' ? 'opacity-50 pointer-events-none' : ''}`}>
-                  🧭 Track Live Location
-                </a>
               </div>
+
+
+              {/* Manifest (Now part of Dashboard) */}
+              <div className="pt-6 mt-6 border-t border-slate-200 fade-in">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                  {/* Manifest */}
+                  <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                      <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">📋 Manifest Details</h2>
+                      <div className="flex gap-4 text-xs font-bold px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
+                        <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Total</span> <span className="text-slate-900 leading-none mt-1">{totals.grand} Box</span></div>
+                        <div className="w-px bg-slate-200"></div>
+                        <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Cap.</span> <span className={`${cap > 90 ? 'text-emerald-600' : 'text-slate-900'} leading-none mt-1`}>{cap}%</span></div>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 text-xs text-slate-500 font-bold uppercase border-b border-slate-200">
+                            <th className="px-5 py-3 sticky left-0 bg-slate-50 border-r border-slate-200">Grade / Variety</th>
+                            {trip.marks.map((m, i) => <th key={i} className="px-5 py-3 text-center min-w-[90px]">{m.name}</th>)}
+                            <th className="px-5 py-3 text-right sticky right-0 bg-slate-50 border-l border-slate-200">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {trip.marks.length === 0
+                            ? <tr><td colSpan={trip.marks.length + 2} className="px-5 py-10 text-center text-slate-400 text-sm">No manifest data</td></tr>
+                            : trip.gradeColumns.map(grade => (
+                              <tr key={grade} className="hover:bg-slate-50 transition-colors">
+                                <td className="px-5 py-3 font-bold text-slate-700 border-r border-slate-100 sticky left-0 bg-white">{grade}</td>
+                                {trip.marks.map((m, i) => (
+                                  <td key={i + grade} className="px-5 py-3 text-center">
+                                    {m.grades[grade]?.manifest
+                                      ? <span className="font-semibold text-slate-700">{m.grades[grade].manifest}</span>
+                                      : <span className="text-slate-200">•</span>}
+                                  </td>
+                                ))}
+                                <td className="px-5 py-3 text-right font-black text-slate-800 border-l border-slate-100 sticky right-0 bg-white">{totals[grade] || 0}</td>
+                              </tr>
+                            ))
+                          }
+                        </tbody>
+                        {trip.marks.length > 0 && (
+                          <tfoot className="border-t border-slate-200 bg-slate-50 font-bold">
+                            <tr>
+                              <td className="px-5 py-3 text-xs uppercase text-slate-500 sticky left-0 bg-slate-50 border-r border-slate-200">Totals</td>
+                              {trip.marks.map((m, i) => {
+                                let cTot = 0; trip.gradeColumns.forEach(g => cTot += (m.grades[g]?.manifest || 0));
+                                return (
+                                  <td key={i} className="px-5 py-3 text-center text-emerald-700 font-black">
+                                    {cTot > 0 ? cTot : <span className="text-slate-200">•</span>}
+                                  </td>
+                                );
+                              })}
+                              <td className="px-5 py-3 text-right text-slate-900 font-black text-base sticky right-0 bg-slate-50 border-l border-slate-200">{totals.grand}</td>
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Load plan */}
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                    <div className="px-6 py-4 border-b border-slate-100">
+                      <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🚛 Load Plan</h2>
+                    </div>
+                    <div className="p-4 flex flex-col items-center flex-1 bg-slate-50/30">
+                      <div className="relative w-full max-w-[200px] flex flex-col my-4">
+                        <div className="h-10 mx-4 bg-gradient-to-b from-slate-700 to-slate-800 rounded-t-xl shadow-lg"></div>
+                        <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[280px]">
+                          {trip.loadingZones.length === 0
+                            ? <div className="flex-1 flex items-center justify-center text-slate-300 text-xs border-2 border-dashed border-slate-200 rounded m-1">No Load Data</div>
+                            : trip.loadingZones.map(z => (
+                              <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} ${z.border} flex flex-col items-center justify-center text-center`}>
+                                <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text}`}>{z.name}</span>
+                                <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{z.description}</span>
+                                <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
+                              </div>
+                            ))
+                          }
+                        </div>
+                        <div className="absolute -right-2 top-14 w-2 h-8 bg-black rounded-r"></div>
+                        <div className="absolute -left-2 top-14 w-2 h-8 bg-black rounded-l"></div>
+                        <div className="absolute -right-2 bottom-10 w-2 h-8 bg-black rounded-r"></div>
+                        <div className="absolute -left-2 bottom-10 w-2 h-8 bg-black rounded-l"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Media Gallery */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mt-6">
+                  <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                    <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🎥 Trip Media</h2>
+                    <div>
+                      <input type="file" accept="video/*,image/*" ref={fileRef} onChange={addVideo} className="hidden" />
+                      <button onClick={() => fileRef.current?.click()}
+                        className="flex items-center gap-1.5 text-xs font-bold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
+                        + Upload
+                      </button>
+                    </div>
+                  </div>
+                  <div className="p-6">
+                    {videos.length === 0
+                      ? <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl">
+                        <div className="text-3xl mb-2">📤</div>
+                        <p className="text-sm font-bold text-slate-600">No Media Uploaded</p>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Upload videos / proofs</p>
+                      </div>
+                      : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                        {videos.map(v => (
+                          <div key={v.id} className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video group">
+                            <video src={v.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" controls />
+                            <button onClick={() => setVideos(vs => vs.filter(x => x.id !== v.id))}
+                              className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full hover:bg-red-500 opacity-0 group-hover:opacity-100 transition-all">✕</button>
+                            <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent pointer-events-none">
+                              <p className="text-xs font-bold text-white truncate">{v.title}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    }
+                  </div>
+                </div>
+              </div>
+
             </div>
           )}
 
@@ -989,128 +1187,6 @@
             </div>
           )}
 
-          {
-            activeTab === 'manifest' && (
-              <div className="space-y-6 fade-in">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                  {/* Manifest */}
-                  <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-                      <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">📋 Manifest Details</h2>
-                      <span className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full">
-                        Total: {totals.grand} Boxes
-                      </span>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm text-left border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 text-xs text-slate-500 font-bold uppercase border-b border-slate-200">
-                            <th className="px-5 py-3 sticky left-0 bg-slate-50 border-r border-slate-200">Grade / Variety</th>
-                            {trip.marks.map(m => <th key={m.id} className="px-5 py-3 text-center min-w-[90px]">{m.name}</th>)}
-                            <th className="px-5 py-3 text-right sticky right-0 bg-slate-50 border-l border-slate-200">Total</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {trip.marks.length === 0
-                            ? <tr><td colSpan={trip.marks.length + 2} className="px-5 py-10 text-center text-slate-400 text-sm">No manifest data</td></tr>
-                            : trip.gradeColumns.map(grade => (
-                              <tr key={grade} className="hover:bg-slate-50 transition-colors">
-                                <td className="px-5 py-3 font-bold text-slate-700 border-r border-slate-100 sticky left-0 bg-white">{grade}</td>
-                                {trip.marks.map(m => (
-                                  <td key={m.id + grade} className="px-5 py-3 text-center">
-                                    {m.grades[grade]
-                                      ? <span className="font-semibold text-slate-700">{m.grades[grade].manifest}</span>
-                                      : <span className="text-slate-200">•</span>}
-                                  </td>
-                                ))}
-                                <td className="px-5 py-3 text-right font-black text-slate-800 border-l border-slate-100 sticky right-0 bg-white">{totals[grade] || 0}</td>
-                              </tr>
-                            ))
-                          }
-                        </tbody>
-                        {trip.marks.length > 0 && (
-                          <tfoot className="border-t border-slate-200 bg-slate-50 font-bold">
-                            <tr>
-                              <td className="px-5 py-3 text-xs uppercase text-slate-500 sticky left-0 bg-slate-50 border-r border-slate-200">Totals</td>
-                              {trip.marks.map(m => (
-                                <td key={m.id} className="px-5 py-3 text-center text-emerald-700 font-black">
-                                  {Object.values(m.grades).reduce((a, b) => a + (b.manifest || 0), 0)}
-                                </td>
-                              ))}
-                              <td className="px-5 py-3 text-right text-slate-900 font-black text-base sticky right-0 bg-slate-50 border-l border-slate-200">{totals.grand}</td>
-                            </tr>
-                          </tfoot>
-                        )}
-                      </table>
-                    </div>
-                  </div>
-
-                  {/* Load plan */}
-                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-                    <div className="px-6 py-4 border-b border-slate-100">
-                      <h2 className="text-sm font-bold text-slate-800">🚛 Load Plan</h2>
-                    </div>
-                    <div className="p-4 flex flex-col items-center flex-1 bg-slate-50/30">
-                      <div className="relative w-full max-w-[200px] flex flex-col my-4">
-                        <div className="h-10 mx-4 bg-gradient-to-b from-slate-700 to-slate-800 rounded-t-xl shadow-lg"></div>
-                        <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[280px]">
-                          {trip.loadingZones.length === 0
-                            ? <div className="flex-1 flex items-center justify-center text-slate-300 text-xs border-2 border-dashed border-slate-200 rounded m-1">No Load Data</div>
-                            : trip.loadingZones.map(z => (
-                              <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} ${z.border} flex flex-col items-center justify-center text-center`}>
-                                <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text}`}>{z.name}</span>
-                                <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{z.description}</span>
-                                <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
-                              </div>
-                            ))
-                          }
-                        </div>
-                        <div className="absolute -right-2 top-14 w-2 h-8 bg-black rounded-r"></div>
-                        <div className="absolute -left-2 top-14 w-2 h-8 bg-black rounded-l"></div>
-                        <div className="absolute -right-2 bottom-10 w-2 h-8 bg-black rounded-r"></div>
-                        <div className="absolute -left-2 bottom-10 w-2 h-8 bg-black rounded-l"></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Media Gallery */}
-                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-                    <h2 className="text-sm font-bold text-slate-800">🎥 Trip Media</h2>
-                    <div>
-                      <input type="file" accept="video/*,image/*" ref={fileRef} onChange={addVideo} className="hidden" />
-                      <button onClick={() => fileRef.current?.click()}
-                        className="flex items-center gap-1.5 text-xs font-bold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
-                        + Upload
-                      </button>
-                    </div>
-                  </div>
-                  <div className="p-6">
-                    {videos.length === 0
-                      ? <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl">
-                        <div className="text-3xl mb-2">📤</div>
-                        <p className="text-sm font-bold text-slate-600">No Media Uploaded</p>
-                        <p className="text-xs text-slate-400 mt-1">Upload packing videos or loading proofs</p>
-                      </div>
-                      : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                        {videos.map(v => (
-                          <div key={v.id} className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video group">
-                            <video src={v.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" controls />
-                            <button onClick={() => setVideos(vs => vs.filter(x => x.id !== v.id))}
-                              className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full hover:bg-red-500 opacity-0 group-hover:opacity-100 transition-all">✕</button>
-                            <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent pointer-events-none">
-                              <p className="text-xs font-bold text-white truncate">{v.title}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    }
-                  </div>
-                </div>
-              </div>
-            )}
         </div>
       );
     }
@@ -1304,7 +1380,7 @@
         setSyncing(true); setError(null);
         try {
           const { data: trades, error: e1 } = await supabase
-            .from('trades').select('*').neq('status', 'CLOSED').order('dispatch_date', { ascending: false });
+            .from('trades').select('*').order('dispatch_date', { ascending: false });
           if (e1) throw e1;
           if (!trades?.length) { setAllTrips([]); throw new Error('No active trades found.'); }
 
@@ -1338,7 +1414,7 @@
           const matchMarket = filterMarkets.length ? filterMarkets.includes(t.details.destination) : true;
           const matchStatus = filterStatuses.length ? filterStatuses.includes(t.details.status) : true;
           return matchDate && matchMarket && matchStatus;
-        });
+        }).sort((a, b) => new Date(b.details.dispatchDate || 0) - new Date(a.details.dispatchDate || 0));
       }, [allTrips, filterDates, filterMarkets, filterStatuses]);
 
       return (
@@ -1442,13 +1518,29 @@
                   : filtered.length === 0
                     ? <div className="flex flex-col items-center py-24 bg-white rounded-2xl border border-dashed border-slate-300">
                       <span className="text-5xl mb-4">🚛</span>
-                      <h3 className="font-bold text-slate-700">No Active Trades Found</h3>
-                      <p className="text-sm text-slate-400 mt-1">Try refreshing or check your Supabase tables.</p>
+                      <h3 className="font-bold text-slate-700">No Trades Found</h3>
+                      <p className="text-sm text-slate-400 mt-1">Try refreshing or adjusting your filters.</p>
                     </div>
-                    : <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-                      {filtered.map(t => (
-                        <FleetCard key={t.details.tripId} trip={t} onClick={() => { setSelectedId(t.details.tripId); setTab('view'); }} />
-                      ))}
+                    : <div>
+                      {filtered.some(t => t.details.status !== 'CLOSED') && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                          {filtered.filter(t => t.details.status !== 'CLOSED').map(t => (
+                            <FleetCard key={t.details.tripId} trip={t} onClick={() => { setSelectedId(t.details.tripId); setTab('view'); }} />
+                          ))}
+                        </div>
+                      )}
+                      {filtered.some(t => t.details.status === 'CLOSED') && (
+                        <div className="mt-8 pt-6 border-t border-slate-200">
+                          <h3 className="text-xl font-black text-slate-800 mb-4 flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-slate-300"></span> Closed Trades
+                          </h3>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 opacity-70 hover:opacity-100 transition-opacity">
+                            {filtered.filter(t => t.details.status === 'CLOSED').map(t => (
+                              <FleetCard key={t.details.tripId} trip={t} onClick={() => { setSelectedId(t.details.tripId); setTab('view'); }} />
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                 }
               </div>
