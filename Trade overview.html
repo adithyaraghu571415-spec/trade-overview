@@ -75,19 +75,22 @@
 
     /* Export Mode overrides for HTML2Canvas */
     .export-mode #manifest-export-container {
-      display: flex !important;
-      flex-wrap: nowrap !important;
       width: max-content !important;
       min-width: 100% !important;
+    }
+
+    .export-mode .export-flex-row {
+      display: flex !important;
+      flex-wrap: nowrap !important;
       gap: 1.5rem !important;
     }
 
-    .export-mode #manifest-export-container>div:first-child {
+    .export-mode .export-flex-row>div:first-child {
       flex: 1 1 auto !important;
       width: max-content !important;
     }
 
-    .export-mode #manifest-export-container>div:last-child {
+    .export-mode .export-flex-row>div:last-child {
       flex: 0 0 320px !important;
       min-width: 320px !important;
     }
@@ -95,6 +98,19 @@
     .export-mode #manifest-export-container .overflow-x-auto,
     .export-mode #manifest-export-container .overflow-hidden {
       overflow: visible !important;
+    }
+
+    .export-mode .export-hide-supplier {
+      display: none !important;
+    }
+
+    /* Force all animations to resolve instantly for clean capture */
+    .export-mode,
+    .export-mode * {
+      animation: none !important;
+      transition: none !important;
+      opacity: 1 !important;
+      transform: none !important;
     }
   </style>
 </head>
@@ -670,6 +686,23 @@
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
           pdf.addImage(imgData, 'JPEG', 0, 10, pdfWidth, pdfHeight);
+
+          // Embed clickable overlay for Tracking button if present
+          if (trip.details?.liveUrl && trip.details.liveUrl !== '#') {
+            const trackBtn = document.getElementById('export-track-link');
+            if (trackBtn) {
+              const elRect = el.getBoundingClientRect();
+              const btnRect = trackBtn.getBoundingClientRect();
+
+              const relX = (btnRect.left - elRect.left) / elRect.width;
+              const relY = (btnRect.top - elRect.top) / elRect.height;
+              const relW = btnRect.width / elRect.width;
+              const relH = btnRect.height / elRect.height;
+
+              pdf.link(relX * pdfWidth, 10 + (relY * pdfHeight), relW * pdfWidth, relH * pdfHeight, { url: trip.details.liveUrl });
+            }
+          }
+
           pdf.save(`Manifest_${localDetails.tripId}.pdf`);
         } catch (e) { console.error('PDF Export error:', e); } finally {
           document.body.classList.remove('export-mode');
@@ -859,190 +892,196 @@
 
               {/* Grid */}
 
-              <div className="space-y-3">
-
-                {/* ── TOP SUMMARY CARD: Origin → Destination + Weather ── */}
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                  <div className="grid grid-cols-1 lg:grid-cols-13 divide-y lg:divide-y-0 lg:divide-x divide-slate-100" style={{ gridTemplateColumns: '5fr 1fr 4fr 2fr' }}>
-
-                    {/* Left: Origin + Supplier */}
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Origin</div>
-                          <div className="text-xl font-black text-slate-900">{localDetails.origin}</div>
-                          <div className="text-xs font-semibold text-emerald-600 mt-1">
-                            📅 {fmtDate(localDetails.dispatchDate)}
-                            {localDetails.dispatchTime && <span className="ml-1.5 text-emerald-500 font-bold">{localDetails.dispatchTime}</span>}
-                          </div>
-                        </div>
-                        <div className="text-right min-w-0">
-                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Supplier</div>
-                          <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.supplier}>{localDetails.supplier}</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Center Arrow */}
-                    <div className="flex items-center justify-center p-3 text-slate-200 text-2xl select-none">→</div>
-
-                    {/* Right: Customer + Destination */}
-                    <div className="p-5">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Customer / DT</div>
-                          <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.dtName || '—'}>{localDetails.dtName || '—'}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Destination</div>
-                          <div className="text-xl font-black text-slate-900">{localDetails.destination}</div>
-                          <div className="text-xs font-semibold text-amber-600 mt-1">{localDetails.eta ? fmtDate(localDetails.eta) : '—'} ⏱</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Weather Square */}
-                    <div className="p-4 flex flex-col items-center justify-center gap-1 bg-slate-50">
-                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Weather</div>
-                      <div className="text-3xl leading-none mt-1">{w.icon}</div>
-                      <div className="text-base font-black text-slate-900">{w.temp}</div>
-                      <div className="text-[9px] text-slate-500">{w.cond}</div>
-                    </div>
-
-                  </div>
+              <div className="flex justify-end items-center mb-4 mt-2 fade-in">
+                <div className="flex gap-2">
+                  <button onClick={downloadManifestAsJPG} title="Download Image" className="px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-indigo-100 shadow-sm active:scale-95"><span>🖼️</span> Export JPG</button>
+                  <button onClick={downloadManifestAsPDF} title="Download PDF" className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-rose-100 shadow-sm active:scale-95"><span>📄</span> Export PDF</button>
                 </div>
-
-                {/* ── SECONDARY ROW: 3 even columns ── */}
-                <div className="grid grid-cols-3 gap-3 items-start">
-
-                  {/* Utilization */}
-                  <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
-                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">📦 Utilization</div>
-                    <div className="flex justify-between items-baseline">
-                      <span className="text-base font-black text-slate-900">{totals.grand}</span>
-                      <span className="text-[10px] text-slate-400">/ {MAX_TRUCK_CAPACITY}</span>
-                    </div>
-                    <div className="w-full bg-slate-100 rounded-full h-1 mt-1.5 overflow-hidden">
-                      <div className={`h-full rounded-full ${cap > 90 ? 'bg-red-500' : 'bg-indigo-400'}`} style={{ width: `${cap}%` }}></div>
-                    </div>
-                    <div className={`text-[9px] font-bold mt-1 ${cap > 90 ? 'text-red-500' : 'text-emerald-600'}`}>{cap}% Full</div>
-                  </div>
-
-                  {/* Vehicle + Driver */}
-                  <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
-                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-2">🚛 Vehicle & Driver</div>
-                    <div className="text-sm font-black text-slate-800">{localDetails.vehicleNo}</div>
-                    <div className="mt-1.5 pt-1.5 border-t border-slate-100">
-                      <div className="text-xs font-bold text-slate-700">{localDetails.driverName}</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">{localDetails.driverContact}</div>
-                    </div>
-                  </div>
-
-                  {/* Track */}
-                  <a href={trip.details.liveUrl} target="_blank" rel="noreferrer"
-                    className={`flex items-center justify-center gap-2 bg-slate-800 hover:bg-emerald-600 text-white rounded-xl py-4 text-sm font-bold transition-all shadow-sm ${trip.details.liveUrl === '#' ? 'opacity-50 pointer-events-none' : ''}`}>
-                    🧭 Track
-                  </a>
-
-                </div>
-
               </div>
 
+              <div id="manifest-export-container" className="bg-[#F8FAFC] p-4 -m-4 rounded-xl space-y-6 fade-in">
 
-              {/* Manifest (Now part of Dashboard) */}
-              <div className="pt-6 mt-6 border-t border-slate-200 fade-in">
-                <div className="flex justify-end items-center mb-4">
-                  <div className="flex gap-2">
-                    <button onClick={downloadManifestAsJPG} title="Download Image" className="px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-indigo-100 shadow-sm active:scale-95"><span>🖼️</span> Export JPG</button>
-                    <button onClick={downloadManifestAsPDF} title="Download PDF" className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-rose-100 shadow-sm active:scale-95"><span>📄</span> Export PDF</button>
-                  </div>
-                </div>
-                <div id="manifest-export-container" className="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-[#F8FAFC] p-4 -m-4 rounded-xl">
+                <div className="space-y-3">
 
-                  {/* Manifest */}
-                  <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-                    <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-                      <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">📋 Manifest Details</h2>
-                      <div className="flex gap-4 text-xs font-bold px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
-                        <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Total</span> <span className="text-slate-900 leading-none mt-1">{totals.grand} Box</span></div>
-                        <div className="w-px bg-slate-200"></div>
-                        <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Cap.</span> <span className={`${cap > 90 ? 'text-emerald-600' : 'text-slate-900'} leading-none mt-1`}>{cap}%</span></div>
-                      </div>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm text-left border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 text-xs text-slate-500 font-bold uppercase border-b border-slate-200">
-                            <th className="px-5 py-3 sticky left-0 bg-slate-50 border-r border-slate-200">Grade / Variety</th>
-                            {trip.marks.map((m, i) => <th key={i} className="px-5 py-3 text-center min-w-[90px]">{cleanBrandName(m.name)}</th>)}
-                            <th className="px-5 py-3 text-right sticky right-0 bg-slate-50 border-l border-slate-200">Total</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {trip.marks.length === 0
-                            ? <tr><td colSpan={trip.marks.length + 2} className="px-5 py-10 text-center text-slate-400 text-sm">No manifest data</td></tr>
-                            : trip.gradeColumns.map(grade => (
-                              <tr key={grade} className="hover:bg-slate-50 transition-colors">
-                                <td className="px-5 py-3 font-bold text-slate-700 border-r border-slate-100 sticky left-0 bg-white">{grade}</td>
-                                {trip.marks.map((m, i) => (
-                                  <td key={i + grade} className="px-5 py-3 text-center">
-                                    {m.grades[grade]?.manifest
-                                      ? <span className="font-semibold text-slate-700">{m.grades[grade].manifest}</span>
-                                      : <span className="text-slate-200">•</span>}
-                                  </td>
-                                ))}
-                                <td className="px-5 py-3 text-right font-black text-slate-800 border-l border-slate-100 sticky right-0 bg-white">{totals[grade] || 0}</td>
-                              </tr>
-                            ))
-                          }
-                        </tbody>
-                        {trip.marks.length > 0 && (
-                          <tfoot className="border-t border-slate-200 bg-slate-50 font-bold">
-                            <tr>
-                              <td className="px-5 py-3 text-xs uppercase text-slate-500 sticky left-0 bg-slate-50 border-r border-slate-200">Totals</td>
-                              {trip.marks.map((m, i) => {
-                                let cTot = 0; trip.gradeColumns.forEach(g => cTot += (m.grades[g]?.manifest || 0));
-                                return (
-                                  <td key={i} className="px-5 py-3 text-center text-emerald-700 font-black">
-                                    {cTot > 0 ? cTot : <span className="text-slate-200">•</span>}
-                                  </td>
-                                );
-                              })}
-                              <td className="px-5 py-3 text-right text-slate-900 font-black text-base sticky right-0 bg-slate-50 border-l border-slate-200">{totals.grand}</td>
-                            </tr>
-                          </tfoot>
-                        )}
-                      </table>
-                    </div>
-                  </div>
+                  {/* ── TOP SUMMARY CARD: Origin → Destination + Weather ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="grid grid-cols-1 lg:grid-cols-13 divide-y lg:divide-y-0 lg:divide-x divide-slate-100" style={{ gridTemplateColumns: '5fr 1fr 4fr 2fr' }}>
 
-                  {/* Load plan */}
-                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-                    <div className="px-6 py-4 border-b border-slate-100">
-                      <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🚛 Load Plan</h2>
-                    </div>
-                    <div className="p-4 flex flex-col items-center flex-1 bg-slate-50/30">
-                      <div className="relative w-full max-w-[200px] flex flex-col my-4">
-                        <div className="h-10 mx-4 bg-gradient-to-b from-slate-700 to-slate-800 rounded-t-xl shadow-lg"></div>
-                        <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[280px]">
-                          {trip.loadingZones.length === 0
-                            ? <div className="flex-1 flex items-center justify-center text-slate-300 text-xs border-2 border-dashed border-slate-200 rounded m-1">No Load Data</div>
-                            : trip.loadingZones.map(z => (
-                              <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} ${z.border} flex flex-col items-center justify-center text-center`}>
-                                <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text}`}>{z.name}</span>
-                                <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{cleanBrandName(z.description)}</span>
-                                <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
-                              </div>
-                            ))
-                          }
+                      {/* Left: Origin + Supplier */}
+                      <div className="p-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Origin</div>
+                            <div className="text-xl font-black text-slate-900">{localDetails.origin}</div>
+                            <div className="text-xs font-semibold text-emerald-600 mt-1">
+                              📅 {fmtDate(localDetails.dispatchDate)}
+                              {localDetails.dispatchTime && <span className="ml-1.5 text-emerald-500 font-bold">{localDetails.dispatchTime}</span>}
+                            </div>
+                          </div>
+                          <div className="text-right min-w-0 export-hide-supplier">
+                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Supplier</div>
+                            <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.supplier}>{localDetails.supplier}</div>
+                          </div>
                         </div>
-                        <div className="absolute -right-2 top-14 w-2 h-8 bg-black rounded-r"></div>
-                        <div className="absolute -left-2 top-14 w-2 h-8 bg-black rounded-l"></div>
-                        <div className="absolute -right-2 bottom-10 w-2 h-8 bg-black rounded-r"></div>
-                        <div className="absolute -left-2 bottom-10 w-2 h-8 bg-black rounded-l"></div>
+                      </div>
+
+                      {/* Center Arrow */}
+                      <div className="flex items-center justify-center p-3 text-slate-200 text-2xl select-none">→</div>
+
+                      {/* Right: Customer + Destination */}
+                      <div className="p-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Customer / DT</div>
+                            <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.dtName || '—'}>{localDetails.dtName || '—'}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Destination</div>
+                            <div className="text-xl font-black text-slate-900">{localDetails.destination}</div>
+                            <div className="text-xs font-semibold text-amber-600 mt-1">{localDetails.eta ? fmtDate(localDetails.eta) : '—'} ⏱</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Weather Square */}
+                      <div className="p-4 flex flex-col items-center justify-center gap-1 bg-slate-50">
+                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Weather</div>
+                        <div className="text-3xl leading-none mt-1">{w.icon}</div>
+                        <div className="text-base font-black text-slate-900">{w.temp}</div>
+                        <div className="text-[9px] text-slate-500">{w.cond}</div>
+                      </div>
+
+                    </div>
+                  </div>
+
+                  {/* ── SECONDARY ROW: 3 even columns ── */}
+                  <div className="grid grid-cols-3 gap-3 items-stretch">
+
+                    {/* Utilization */}
+                    <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">📦 Utilization</div>
+                      <div className="flex justify-between items-baseline">
+                        <span className="text-base font-black text-slate-900">{totals.grand}</span>
+                        <span className="text-[10px] text-slate-400">/ {MAX_TRUCK_CAPACITY}</span>
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-1 mt-1.5 overflow-hidden">
+                        <div className={`h-full rounded-full ${cap > 90 ? 'bg-red-500' : 'bg-indigo-400'}`} style={{ width: `${cap}%` }}></div>
+                      </div>
+                      <div className={`text-[9px] font-bold mt-1 ${cap > 90 ? 'text-red-500' : 'text-emerald-600'}`}>{cap}% Full</div>
+                    </div>
+
+                    {/* Vehicle + Driver */}
+                    <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-2">🚛 Vehicle & Driver</div>
+                      <div className="text-sm font-black text-slate-800">{localDetails.vehicleNo}</div>
+                      <div className="mt-1.5 pt-1.5 border-t border-slate-100">
+                        <div className="text-xs font-bold text-slate-700">{localDetails.driverName}</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">{localDetails.driverContact}</div>
+                      </div>
+                    </div>
+
+                    {/* Track */}
+                    <a href={trip.details.liveUrl} target="_blank" rel="noreferrer"
+                      id="export-track-link"
+                      className={`flex items-center justify-center h-full gap-2 bg-slate-800 hover:bg-emerald-600 text-white rounded-xl py-4 text-sm font-bold transition-all shadow-sm flex-1 ${trip.details.liveUrl === '#' ? 'opacity-50 pointer-events-none' : ''}`}>
+                      🧭 Track
+                    </a>
+
+                  </div>
+
+                </div>
+
+
+                {/* Manifest (Now part of Dashboard) */}
+                <div className="pt-6 border-t border-slate-200">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 export-flex-row">
+
+                    {/* Manifest */}
+                    <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                      <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                        <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">📋 Manifest Details</h2>
+                        <div className="flex gap-4 text-xs font-bold px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
+                          <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Total</span> <span className="text-slate-900 leading-none mt-1">{totals.grand} Box</span></div>
+                          <div className="w-px bg-slate-200"></div>
+                          <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Cap.</span> <span className={`${cap > 90 ? 'text-emerald-600' : 'text-slate-900'} leading-none mt-1`}>{cap}%</span></div>
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 text-xs text-slate-500 font-bold uppercase border-b border-slate-200">
+                              <th className="px-5 py-3 sticky left-0 bg-slate-50 border-r border-slate-200">Grade / Variety</th>
+                              {trip.marks.map((m, i) => <th key={i} className="px-5 py-3 text-center min-w-[90px]">{cleanBrandName(m.name)}</th>)}
+                              <th className="px-5 py-3 text-right sticky right-0 bg-slate-50 border-l border-slate-200">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {trip.marks.length === 0
+                              ? <tr><td colSpan={trip.marks.length + 2} className="px-5 py-10 text-center text-slate-400 text-sm">No manifest data</td></tr>
+                              : trip.gradeColumns.map(grade => (
+                                <tr key={grade} className="hover:bg-slate-50 transition-colors">
+                                  <td className="px-5 py-3 font-bold text-slate-700 border-r border-slate-100 sticky left-0 bg-white">{grade}</td>
+                                  {trip.marks.map((m, i) => (
+                                    <td key={i + grade} className="px-5 py-3 text-center">
+                                      {m.grades[grade]?.manifest
+                                        ? <span className="font-semibold text-slate-700">{m.grades[grade].manifest}</span>
+                                        : <span className="text-slate-200">•</span>}
+                                    </td>
+                                  ))}
+                                  <td className="px-5 py-3 text-right font-black text-slate-800 border-l border-slate-100 sticky right-0 bg-white">{totals[grade] || 0}</td>
+                                </tr>
+                              ))
+                            }
+                          </tbody>
+                          {trip.marks.length > 0 && (
+                            <tfoot className="border-t border-slate-200 bg-slate-50 font-bold">
+                              <tr>
+                                <td className="px-5 py-3 text-xs uppercase text-slate-500 sticky left-0 bg-slate-50 border-r border-slate-200">Totals</td>
+                                {trip.marks.map((m, i) => {
+                                  let cTot = 0; trip.gradeColumns.forEach(g => cTot += (m.grades[g]?.manifest || 0));
+                                  return (
+                                    <td key={i} className="px-5 py-3 text-center text-emerald-700 font-black">
+                                      {cTot > 0 ? cTot : <span className="text-slate-200">•</span>}
+                                    </td>
+                                  );
+                                })}
+                                <td className="px-5 py-3 text-right text-slate-900 font-black text-base sticky right-0 bg-slate-50 border-l border-slate-200">{totals.grand}</td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Load plan */}
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                      <div className="px-6 py-4 border-b border-slate-100">
+                        <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🚛 Load Plan</h2>
+                      </div>
+                      <div className="p-4 flex flex-col items-center flex-1 bg-slate-50/30">
+                        <div className="relative w-full max-w-[200px] flex flex-col my-4">
+                          <div className="h-10 mx-4 bg-gradient-to-b from-slate-700 to-slate-800 rounded-t-xl shadow-lg"></div>
+                          <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[280px]">
+                            {trip.loadingZones.length === 0
+                              ? <div className="flex-1 flex items-center justify-center text-slate-300 text-xs border-2 border-dashed border-slate-200 rounded m-1">No Load Data</div>
+                              : trip.loadingZones.map(z => (
+                                <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} ${z.border} flex flex-col items-center justify-center text-center`}>
+                                  <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text}`}>{z.name}</span>
+                                  <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{cleanBrandName(z.description)}</span>
+                                  <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
+                                </div>
+                              ))
+                            }
+                          </div>
+                          <div className="absolute -right-2 top-14 w-2 h-8 bg-black rounded-r"></div>
+                          <div className="absolute -left-2 top-14 w-2 h-8 bg-black rounded-l"></div>
+                          <div className="absolute -right-2 bottom-10 w-2 h-8 bg-black rounded-r"></div>
+                          <div className="absolute -left-2 bottom-10 w-2 h-8 bg-black rounded-l"></div>
+                        </div>
                       </div>
                     </div>
                   </div>
+
                 </div>
 
                 {/* Media Gallery */}
