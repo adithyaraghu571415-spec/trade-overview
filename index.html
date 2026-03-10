@@ -983,8 +983,14 @@
                     {/* Track */}
                     <a href={trip.details.liveUrl} target="_blank" rel="noreferrer"
                       id="export-track-link"
-                      className={`flex items-center justify-center h-full gap-2 bg-slate-800 hover:bg-emerald-600 text-white rounded-xl py-4 text-sm font-bold transition-all shadow-sm flex-1 ${trip.details.liveUrl === '#' ? 'opacity-50 pointer-events-none' : ''}`}>
-                      🧭 Track
+                      className={`block bg-white rounded-xl p-4 border border-slate-100 shadow-sm h-full flex flex-col justify-center transition-all hover:border-emerald-300 hover:shadow-md ${trip.details.liveUrl === '#' ? 'opacity-50 pointer-events-none' : ''}`}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xl">🧭</span>
+                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Live Tracking Link</div>
+                      </div>
+                      <div className="text-sm font-black text-emerald-600 truncate ml-7">
+                        {trip.details.liveUrl === '#' ? 'No tracking available' : 'Click here to track shipment'}
+                      </div>
                     </a>
 
                   </div>
