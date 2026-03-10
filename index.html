@@ -1092,233 +1092,238 @@
 
                 </div>
 
-                {/* Media Gallery */}
-                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mt-6">
-                  <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
-                    <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🎥 Trip Media</h2>
-                    <div>
-                      <input type="file" accept="video/*,image/*" ref={fileRef} onChange={addVideo} className="hidden" />
-                      <button onClick={() => fileRef.current?.click()}
-                        className="flex items-center gap-1.5 text-xs font-bold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
-                        + Upload
-                      </button>
-                    </div>
-                  </div>
-                  <div className="p-6">
-                    {videos.length === 0
-                      ? <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl">
-                        <div className="text-3xl mb-2">📤</div>
-                        <p className="text-sm font-bold text-slate-600">No Media Uploaded</p>
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Upload videos / proofs</p>
-                      </div>
-                      : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                        {videos.map(v => (
-                          <div key={v.id} className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video group">
-                            <video src={v.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" controls />
-                            <button onClick={() => setVideos(vs => vs.filter(x => x.id !== v.id))}
-                              className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full hover:bg-red-500 opacity-0 group-hover:opacity-100 transition-all">✕</button>
-                            <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent pointer-events-none">
-                              <p className="text-xs font-bold text-white truncate">{v.title}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    }
-                  </div>
-                </div>
               </div>
 
+              {/* Media Gallery */}
+              <div data-html2canvas-ignore="true" className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden mt-6">
+                <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                  <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🎥 Trip Media</h2>
+                  <div>
+                    <input type="file" accept="video/*,image/*" ref={fileRef} onChange={addVideo} className="hidden" />
+                    <button onClick={() => fileRef.current?.click()}
+                      className="flex items-center gap-1.5 text-xs font-bold text-purple-700 bg-purple-50 px-3 py-1.5 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
+                      + Upload
+                    </button>
+                  </div>
+                </div>
+                <div className="p-6">
+                  {videos.length === 0
+                    ? <div className="text-center py-10 border-2 border-dashed border-slate-200 rounded-xl">
+                      <div className="text-3xl mb-2">📤</div>
+                      <p className="text-sm font-bold text-slate-600">No Media Uploaded</p>
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Upload videos / proofs</p>
+                    </div>
+                    : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                      {videos.map(v => (
+                        <div key={v.id} className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video group">
+                          <video src={v.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" controls />
+                          <button onClick={() => setVideos(vs => vs.filter(x => x.id !== v.id))}
+                            className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full hover:bg-red-500 opacity-0 group-hover:opacity-100 transition-all">✕</button>
+                          <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent pointer-events-none">
+                            <p className="text-xs font-bold text-white truncate">{v.title}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  }
+                </div>
+              </div>
             </div>
-          )}
 
+            </div >
+      )
+    }
+
+    {
+      activeTab === 'market' && (
+        <div className="space-y-6 fade-in">
+          {/* Market Reception & Sales content ... (I will keep the existing logic but fix the wrappers) */}
+          {/* Sticky floating save button */}
           {activeTab === 'market' && (
-            <div className="space-y-6 fade-in">
-              {/* Market Reception & Sales content ... (I will keep the existing logic but fix the wrappers) */}
-              {/* Sticky floating save button */}
-              {activeTab === 'market' && (
-                <div className="save-float">
-                  <button onClick={saveMarketData} disabled={saving}
-                    className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-sm px-5 py-3 rounded-2xl shadow-xl transition-all disabled:opacity-50 flex items-center gap-2">
-                    {saving ? <><span className="animate-spin inline-block">↻</span> Saving…</> : '💾 Save Market Data'}
-                  </button>
-                </div>
-              )}
+            <div className="save-float">
+              <button onClick={saveMarketData} disabled={saving}
+                className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-sm px-5 py-3 rounded-2xl shadow-xl transition-all disabled:opacity-50 flex items-center gap-2">
+                {saving ? <><span className="animate-spin inline-block">↻</span> Saving…</> : '💾 Save Market Data'}
+              </button>
+            </div>
+          )}
 
-              {/* Auto status bump prompt */}
-              {showStatusPrompt && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3 fade-in">
-                  <p className="text-sm font-bold text-amber-800">🎉 Sales rates saved! Mark this trip as <span className="text-emerald-700">Sales Completed</span>?</p>
-                  <div className="flex gap-2 flex-shrink-0">
-                    <button onClick={() => setShowStatusPrompt(false)} className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">Later</button>
-                    <button onClick={async () => {
-                      setShowStatusPrompt(false);
-                      const { error } = await supabase.from('trades').update({ status: 'SALES_COMPLETED' }).eq('trip_id', localDetails.tripId);
-                      if (!error) {
-                        const updated = { ...localDetails, status: 'SALES_COMPLETED' };
-                        setLocalDetails(updated);
-                        setEditData(d => ({ ...d, status: 'SALES_COMPLETED' }));
-                        onUpdate(localDetails.tripId, updated);
-                        setSaveMsg('✓ Status updated to Sales Completed');
-                        setTimeout(() => setSaveMsg(''), 3000);
-                      }
-                    }} className="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg">Yes, Mark Complete</button>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-md">
-                {/* ... existing market content ... */}
-                <div className="lg:col-span-3 space-y-6 fade-in">
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-md p-6">
-                    <div className="flex items-center justify-between mb-6">
-                      <div>
-                        <h2 className="text-lg font-black text-slate-900 leading-tight">📍 Market Reception & Sales</h2>
-                        <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-0.5">Enter actual arrival stock and sales rates</p>
-                      </div>
-                    </div>
-
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left">
-                        <thead>
-                          <tr className="border-b border-slate-100 text-[10px] uppercase font-black text-slate-400 tracking-wider">
-                            <th className="py-3 px-2">Brand / Grade</th>
-                            <th className="py-3 px-2 text-center bg-slate-50 rounded-t-lg">Manifest</th>
-                            <th className="py-3 px-2 text-center bg-emerald-50 text-emerald-700 rounded-t-lg">Received</th>
-                            <th className="py-3 px-2 text-center">Diff.</th>
-                            {showSales && (
-                              <>
-                                <th className="py-3 px-2 text-center bg-blue-50 text-blue-700 rounded-t-lg italic">Sales Rate (₹)</th>
-                                <th className="py-3 px-2 text-right">Raw Total</th>
-                              </>
-                            )}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50 text-sm">
-                          {trip.marks.map(m => (
-                            <React.Fragment key={m.id}>
-                              <tr className="bg-slate-50/50">
-                                <td colSpan="6" className="py-1.5 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">{cleanBrandName(m.name)}</td>
-                              </tr>
-                              {trip.gradeColumns.map(grade => {
-                                const v = m.grades[grade];
-                                if (!v) return null;
-                                const data = itemData[v.id] || { received: v.received || '', rate: v.rate || '' };
-                                const diff = (parseInt(data.received) || 0) - v.manifest;
-                                const rowTotal = (parseInt(data.received) || 0) * (parseFloat(data.rate) || 0);
-
-                                // Variance alert: received < manifest by >5%
-                                const shortage = v.manifest > 0 ? (v.manifest - (parseInt(data.received) || 0)) / v.manifest : 0;
-                                const isShortage = shortage > 0.05 && (parseInt(data.received) || 0) > 0;
-                                const isBigShortage = shortage > 0.2 && (parseInt(data.received) || 0) > 0;
-
-                                return (
-                                  <tr key={v.id} className={`transition-colors ${isBigShortage ? 'bg-red-50 hover:bg-red-100' : isShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-slate-50/50'}`}>
-                                    <td className="py-2.5 px-2 font-bold text-slate-700">{grade}</td>
-                                    <td className="py-2.5 px-2 text-center font-mono font-bold text-slate-400">{v.manifest}</td>
-                                    <td className="py-2.5 px-2 text-center bg-emerald-50/30">
-                                      <input type="number" value={data.received}
-                                        onChange={e => setItem(v.id, 'received', e.target.value)}
-                                        placeholder="0"
-                                        className="w-16 h-8 text-center text-sm font-black text-emerald-700 bg-white border border-emerald-200 rounded focus:border-emerald-500 focus:outline-none" />
-                                    </td>
-                                    <td className="py-2.5 px-2 text-center">
-                                      <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${diff < 0 ? 'bg-red-50 text-red-600' : diff > 0 ? 'bg-amber-50 text-amber-600' : 'text-slate-300'}`}>
-                                        {diff === 0 ? '--' : (diff > 0 ? `+${diff}` : diff)}
-                                      </span>
-                                    </td>
-                                    {showSales && (
-                                      <>
-                                        <td className="py-2.5 px-2 text-center bg-blue-50/30">
-                                          <input type="number" value={data.rate}
-                                            onChange={e => setItem(v.id, 'rate', e.target.value)}
-                                            placeholder="0.00"
-                                            className="w-20 h-8 text-center text-sm font-black text-blue-700 bg-white border border-blue-200 rounded focus:border-blue-500 focus:outline-none placeholder:text-blue-200" />
-                                        </td>
-                                        <td className="py-2.5 px-2 text-right font-mono font-bold text-slate-900">
-                                          {rowTotal > 0 ? `₹${rowTotal.toLocaleString()}` : '--'}
-                                        </td>
-                                      </>
-                                    )}
-                                  </tr>
-                                );
-                              })}
-                            </React.Fragment>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {showSales && (
-                      <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-6 border-t border-slate-100">
-                        <div className="lg:col-span-1 space-y-3">
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Trip Logistics & Charges</label>
-                          <div className="flex flex-col gap-2">
-                            <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
-                              <span className="text-xs font-bold text-slate-500">Freight (₹)</span>
-                              <input type="number" value={expenses.freight} onChange={e => setExpenses(ex => ({ ...ex, freight: e.target.value }))}
-                                className="w-24 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
-                            </div>
-                            <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
-                              <span className="text-xs font-bold text-slate-500">Coolie (₹)</span>
-                              <input type="number" value={expenses.coolie} onChange={e => setExpenses(ex => ({ ...ex, coolie: e.target.value }))}
-                                className="w-24 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
-                            </div>
-                            <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 text-blue-700">
-                              <span className="text-xs font-bold opacity-70">DT Commission (₹)</span>
-                              <input type="number" value={expenses.commission} onChange={e => setExpenses(ex => ({ ...ex, commission: e.target.value }))}
-                                className="w-24 h-7 text-right text-xs font-bold border border-blue-200 rounded px-1.5 focus:outline-none focus:border-blue-300 text-blue-700" />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="lg:col-span-2 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Other Charges</label>
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-bold text-slate-400 italic">specify:</span>
-                              <input type="text" value={expenses.note} onChange={e => setExpenses(ex => ({ ...ex, note: e.target.value }))}
-                                placeholder="e.g. Loading surcharge"
-                                className="w-40 h-7 text-xs border rounded-lg px-2 focus:outline-none focus:border-emerald-300" />
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
-                            <span className="text-xs font-bold text-slate-500">Amount (₹)</span>
-                            <input type="number" value={expenses.other} onChange={e => setExpenses(ex => ({ ...ex, other: e.target.value }))}
-                              className="w-40 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
-                          </div>
-                          <div className="p-3 bg-amber-50/50 rounded-lg border border-amber-100 mt-2">
-                            <p className="text-[10px] text-amber-700 font-bold leading-tight">
-                              💡 Total realization reflects Gross Sales minus all above charges (Freight, Collie, Comm., Other).
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="bg-slate-900 text-white rounded-xl p-4 shadow-lg text-right flex flex-col justify-center">
-                          <p className="text-[10px] font-bold uppercase opacity-60 tracking-widest">Est. Net Realization</p>
-                          <h4 className="text-2xl font-black text-emerald-400">₹ {totals.net.toLocaleString()}</h4>
-                          {totals.netPerBox > 0 && <p className="text-[11px] text-emerald-300 font-bold mt-1">₹ {totals.netPerBox.toLocaleString()} / box</p>}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Trip Notes */}
-                    <div className="mt-6 pt-5 border-t border-slate-100">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">📝 Trip Notes</label>
-                      <textarea
-                        value={tripNotes}
-                        onChange={e => setTripNotes(e.target.value)}
-                        placeholder="Market conditions, special instructions, delays…"
-                        rows={2}
-                        className="w-full px-3 py-2 text-sm text-slate-700 border border-slate-200 rounded-xl focus:border-emerald-400 focus:outline-none resize-none bg-slate-50"
-                      />
-                    </div>
-                  </div>
-                </div>
+          {/* Auto status bump prompt */}
+          {showStatusPrompt && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3 fade-in">
+              <p className="text-sm font-bold text-amber-800">🎉 Sales rates saved! Mark this trip as <span className="text-emerald-700">Sales Completed</span>?</p>
+              <div className="flex gap-2 flex-shrink-0">
+                <button onClick={() => setShowStatusPrompt(false)} className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">Later</button>
+                <button onClick={async () => {
+                  setShowStatusPrompt(false);
+                  const { error } = await supabase.from('trades').update({ status: 'SALES_COMPLETED' }).eq('trip_id', localDetails.tripId);
+                  if (!error) {
+                    const updated = { ...localDetails, status: 'SALES_COMPLETED' };
+                    setLocalDetails(updated);
+                    setEditData(d => ({ ...d, status: 'SALES_COMPLETED' }));
+                    onUpdate(localDetails.tripId, updated);
+                    setSaveMsg('✓ Status updated to Sales Completed');
+                    setTimeout(() => setSaveMsg(''), 3000);
+                  }
+                }} className="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg">Yes, Mark Complete</button>
               </div>
             </div>
           )}
 
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-md">
+            {/* ... existing market content ... */}
+            <div className="lg:col-span-3 space-y-6 fade-in">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-md p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h2 className="text-lg font-black text-slate-900 leading-tight">📍 Market Reception & Sales</h2>
+                    <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-0.5">Enter actual arrival stock and sales rates</p>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-[10px] uppercase font-black text-slate-400 tracking-wider">
+                        <th className="py-3 px-2">Brand / Grade</th>
+                        <th className="py-3 px-2 text-center bg-slate-50 rounded-t-lg">Manifest</th>
+                        <th className="py-3 px-2 text-center bg-emerald-50 text-emerald-700 rounded-t-lg">Received</th>
+                        <th className="py-3 px-2 text-center">Diff.</th>
+                        {showSales && (
+                          <>
+                            <th className="py-3 px-2 text-center bg-blue-50 text-blue-700 rounded-t-lg italic">Sales Rate (₹)</th>
+                            <th className="py-3 px-2 text-right">Raw Total</th>
+                          </>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50 text-sm">
+                      {trip.marks.map(m => (
+                        <React.Fragment key={m.id}>
+                          <tr className="bg-slate-50/50">
+                            <td colSpan="6" className="py-1.5 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">{cleanBrandName(m.name)}</td>
+                          </tr>
+                          {trip.gradeColumns.map(grade => {
+                            const v = m.grades[grade];
+                            if (!v) return null;
+                            const data = itemData[v.id] || { received: v.received || '', rate: v.rate || '' };
+                            const diff = (parseInt(data.received) || 0) - v.manifest;
+                            const rowTotal = (parseInt(data.received) || 0) * (parseFloat(data.rate) || 0);
+
+                            // Variance alert: received < manifest by >5%
+                            const shortage = v.manifest > 0 ? (v.manifest - (parseInt(data.received) || 0)) / v.manifest : 0;
+                            const isShortage = shortage > 0.05 && (parseInt(data.received) || 0) > 0;
+                            const isBigShortage = shortage > 0.2 && (parseInt(data.received) || 0) > 0;
+
+                            return (
+                              <tr key={v.id} className={`transition-colors ${isBigShortage ? 'bg-red-50 hover:bg-red-100' : isShortage ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-slate-50/50'}`}>
+                                <td className="py-2.5 px-2 font-bold text-slate-700">{grade}</td>
+                                <td className="py-2.5 px-2 text-center font-mono font-bold text-slate-400">{v.manifest}</td>
+                                <td className="py-2.5 px-2 text-center bg-emerald-50/30">
+                                  <input type="number" value={data.received}
+                                    onChange={e => setItem(v.id, 'received', e.target.value)}
+                                    placeholder="0"
+                                    className="w-16 h-8 text-center text-sm font-black text-emerald-700 bg-white border border-emerald-200 rounded focus:border-emerald-500 focus:outline-none" />
+                                </td>
+                                <td className="py-2.5 px-2 text-center">
+                                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${diff < 0 ? 'bg-red-50 text-red-600' : diff > 0 ? 'bg-amber-50 text-amber-600' : 'text-slate-300'}`}>
+                                    {diff === 0 ? '--' : (diff > 0 ? `+${diff}` : diff)}
+                                  </span>
+                                </td>
+                                {showSales && (
+                                  <>
+                                    <td className="py-2.5 px-2 text-center bg-blue-50/30">
+                                      <input type="number" value={data.rate}
+                                        onChange={e => setItem(v.id, 'rate', e.target.value)}
+                                        placeholder="0.00"
+                                        className="w-20 h-8 text-center text-sm font-black text-blue-700 bg-white border border-blue-200 rounded focus:border-blue-500 focus:outline-none placeholder:text-blue-200" />
+                                    </td>
+                                    <td className="py-2.5 px-2 text-right font-mono font-bold text-slate-900">
+                                      {rowTotal > 0 ? `₹${rowTotal.toLocaleString()}` : '--'}
+                                    </td>
+                                  </>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {showSales && (
+                  <div className="mt-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-6 border-t border-slate-100">
+                    <div className="lg:col-span-1 space-y-3">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Trip Logistics & Charges</label>
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-xs font-bold text-slate-500">Freight (₹)</span>
+                          <input type="number" value={expenses.freight} onChange={e => setExpenses(ex => ({ ...ex, freight: e.target.value }))}
+                            className="w-24 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                          <span className="text-xs font-bold text-slate-500">Coolie (₹)</span>
+                          <input type="number" value={expenses.coolie} onChange={e => setExpenses(ex => ({ ...ex, coolie: e.target.value }))}
+                            className="w-24 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100 text-blue-700">
+                          <span className="text-xs font-bold opacity-70">DT Commission (₹)</span>
+                          <input type="number" value={expenses.commission} onChange={e => setExpenses(ex => ({ ...ex, commission: e.target.value }))}
+                            className="w-24 h-7 text-right text-xs font-bold border border-blue-200 rounded px-1.5 focus:outline-none focus:border-blue-300 text-blue-700" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="lg:col-span-2 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Other Charges</label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-slate-400 italic">specify:</span>
+                          <input type="text" value={expenses.note} onChange={e => setExpenses(ex => ({ ...ex, note: e.target.value }))}
+                            placeholder="e.g. Loading surcharge"
+                            className="w-40 h-7 text-xs border rounded-lg px-2 focus:outline-none focus:border-emerald-300" />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between p-2 bg-slate-50 rounded-lg border border-slate-100">
+                        <span className="text-xs font-bold text-slate-500">Amount (₹)</span>
+                        <input type="number" value={expenses.other} onChange={e => setExpenses(ex => ({ ...ex, other: e.target.value }))}
+                          className="w-40 h-7 text-right text-xs font-bold border rounded px-1.5 focus:outline-none focus:border-emerald-300" />
+                      </div>
+                      <div className="p-3 bg-amber-50/50 rounded-lg border border-amber-100 mt-2">
+                        <p className="text-[10px] text-amber-700 font-bold leading-tight">
+                          💡 Total realization reflects Gross Sales minus all above charges (Freight, Collie, Comm., Other).
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-900 text-white rounded-xl p-4 shadow-lg text-right flex flex-col justify-center">
+                      <p className="text-[10px] font-bold uppercase opacity-60 tracking-widest">Est. Net Realization</p>
+                      <h4 className="text-2xl font-black text-emerald-400">₹ {totals.net.toLocaleString()}</h4>
+                      {totals.netPerBox > 0 && <p className="text-[11px] text-emerald-300 font-bold mt-1">₹ {totals.netPerBox.toLocaleString()} / box</p>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Trip Notes */}
+                <div className="mt-6 pt-5 border-t border-slate-100">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">📝 Trip Notes</label>
+                  <textarea
+                    value={tripNotes}
+                    onChange={e => setTripNotes(e.target.value)}
+                    placeholder="Market conditions, special instructions, delays…"
+                    rows={2}
+                    className="w-full px-3 py-2 text-sm text-slate-700 border border-slate-200 rounded-xl focus:border-emerald-400 focus:outline-none resize-none bg-slate-50"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
+      )
+    }
+
+        </div >
       );
     }
 
