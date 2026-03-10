@@ -10,6 +10,8 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
     rel="stylesheet" />
   <style>
@@ -69,7 +71,30 @@
       bottom: 24px;
       right: 24px;
       z-index: 100;
-      animation: fadeIn 0.3s ease;
+    }
+
+    /* Export Mode overrides for HTML2Canvas */
+    .export-mode #manifest-export-container {
+      display: flex !important;
+      flex-wrap: nowrap !important;
+      width: max-content !important;
+      min-width: 100% !important;
+      gap: 1.5rem !important;
+    }
+
+    .export-mode #manifest-export-container>div:first-child {
+      flex: 1 1 auto !important;
+      width: max-content !important;
+    }
+
+    .export-mode #manifest-export-container>div:last-child {
+      flex: 0 0 320px !important;
+      min-width: 320px !important;
+    }
+
+    .export-mode #manifest-export-container .overflow-x-auto,
+    .export-mode #manifest-export-container .overflow-hidden {
+      overflow: visible !important;
     }
   </style>
 </head>
@@ -598,6 +623,59 @@
         e.target.value = '';
       };
 
+      const cleanBrandName = name => name ? name.split(' - ').pop() : '';
+
+      const downloadManifestAsJPG = async () => {
+        const el = document.getElementById('manifest-export-container');
+        if (!el) return;
+
+        document.body.classList.add('export-mode');
+        await new Promise(r => setTimeout(r, 150)); // Allow layout to snap to full width
+
+        try {
+          const captureWidth = Math.max(1200, el.scrollWidth);
+          const canvas = await window.html2canvas(el, {
+            scale: 2,
+            backgroundColor: '#F8FAFC',
+            windowWidth: captureWidth,
+            width: captureWidth
+          });
+          const link = document.createElement('a');
+          link.download = `Manifest_${localDetails.tripId}.jpg`;
+          link.href = canvas.toDataURL('image/jpeg', 0.9);
+          link.click();
+        } catch (e) { console.error('JPG Export error:', e); } finally {
+          document.body.classList.remove('export-mode');
+        }
+      };
+
+      const downloadManifestAsPDF = async () => {
+        const el = document.getElementById('manifest-export-container');
+        if (!el) return;
+
+        document.body.classList.add('export-mode');
+        await new Promise(r => setTimeout(r, 150)); // Allow layout to snap to full width
+
+        try {
+          const captureWidth = Math.max(1200, el.scrollWidth);
+          const canvas = await window.html2canvas(el, {
+            scale: 2,
+            backgroundColor: '#F8FAFC',
+            windowWidth: captureWidth,
+            width: captureWidth
+          });
+          const imgData = canvas.toDataURL('image/jpeg', 0.9);
+          const orientation = canvas.width > canvas.height ? 'l' : 'p';
+          const pdf = new window.jspdf.jsPDF(orientation, 'mm', 'a4');
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+          pdf.addImage(imgData, 'JPEG', 0, 10, pdfWidth, pdfHeight);
+          pdf.save(`Manifest_${localDetails.tripId}.pdf`);
+        } catch (e) { console.error('PDF Export error:', e); } finally {
+          document.body.classList.remove('export-mode');
+        }
+      };
+
       return (
         <div className="space-y-6 fade-in pb-16 pt-6">
 
@@ -873,10 +951,16 @@
 
               {/* Manifest (Now part of Dashboard) */}
               <div className="pt-6 mt-6 border-t border-slate-200 fade-in">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="flex justify-end items-center mb-4">
+                  <div className="flex gap-2">
+                    <button onClick={downloadManifestAsJPG} title="Download Image" className="px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-indigo-100 shadow-sm active:scale-95"><span>🖼️</span> Export JPG</button>
+                    <button onClick={downloadManifestAsPDF} title="Download PDF" className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-rose-100 shadow-sm active:scale-95"><span>📄</span> Export PDF</button>
+                  </div>
+                </div>
+                <div id="manifest-export-container" className="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-[#F8FAFC] p-4 -m-4 rounded-xl">
 
                   {/* Manifest */}
-                  <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
                     <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
                       <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">📋 Manifest Details</h2>
                       <div className="flex gap-4 text-xs font-bold px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
@@ -890,7 +974,7 @@
                         <thead>
                           <tr className="bg-slate-50 text-xs text-slate-500 font-bold uppercase border-b border-slate-200">
                             <th className="px-5 py-3 sticky left-0 bg-slate-50 border-r border-slate-200">Grade / Variety</th>
-                            {trip.marks.map((m, i) => <th key={i} className="px-5 py-3 text-center min-w-[90px]">{m.name}</th>)}
+                            {trip.marks.map((m, i) => <th key={i} className="px-5 py-3 text-center min-w-[90px]">{cleanBrandName(m.name)}</th>)}
                             <th className="px-5 py-3 text-right sticky right-0 bg-slate-50 border-l border-slate-200">Total</th>
                           </tr>
                         </thead>
@@ -946,7 +1030,7 @@
                             : trip.loadingZones.map(z => (
                               <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} ${z.border} flex flex-col items-center justify-center text-center`}>
                                 <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text}`}>{z.name}</span>
-                                <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{z.description}</span>
+                                <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{cleanBrandName(z.description)}</span>
                                 <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
                               </div>
                             ))
@@ -1066,7 +1150,7 @@
                           {trip.marks.map(m => (
                             <React.Fragment key={m.id}>
                               <tr className="bg-slate-50/50">
-                                <td colSpan="6" className="py-1.5 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">{m.name}</td>
+                                <td colSpan="6" className="py-1.5 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">{cleanBrandName(m.name)}</td>
                               </tr>
                               {trip.gradeColumns.map(grade => {
                                 const v = m.grades[grade];
