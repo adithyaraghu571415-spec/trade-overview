@@ -104,6 +104,14 @@
       display: none !important;
     }
 
+    .export-show {
+      display: none !important;
+    }
+
+    .export-mode .export-show {
+      display: block !important;
+    }
+
     /* Force all animations to resolve instantly for clean capture */
     .export-mode,
     .export-mode * {
@@ -900,6 +908,8 @@
               </div>
 
               <div id="manifest-export-container" className="bg-[#F8FAFC] p-4 -m-4 rounded-xl space-y-6 fade-in">
+                {/* Logo that only shows during export */}
+                <img src="logo.png" alt="Ninjacart Logo" className="export-show h-10 object-contain mx-auto mb-2" />
 
                 <div className="space-y-3">
 
