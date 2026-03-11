@@ -104,14 +104,6 @@
       display: none !important;
     }
 
-    .export-show {
-      display: none !important;
-    }
-
-    .export-mode .export-show {
-      display: block !important;
-    }
-
     /* Force all animations to resolve instantly for clean capture */
     .export-mode,
     .export-mode * {
@@ -445,6 +437,8 @@
       const [saving, setSaving] = useState(false);
       const [saveMsg, setSaveMsg] = useState('');
       const [showStatusPrompt, setShowStatusPrompt] = useState(false);
+      const [exportPreview, setExportPreview] = useState(null);
+      const [exportingType, setExportingType] = useState(null);
       const [localDetails, setLocalDetails] = useState(trip.details);
       const [editData, setEditData] = useState({
         status: trip.details.status, destination: trip.details.destination,
@@ -649,72 +643,72 @@
 
       const cleanBrandName = name => name ? name.split(' - ').pop() : '';
 
-      const downloadManifestAsJPG = async () => {
+      const generateExportData = async () => {
         const el = document.getElementById('manifest-export-container');
         if (!el) return;
 
-        document.body.classList.add('export-mode');
-        await new Promise(r => setTimeout(r, 150)); // Allow layout to snap to full width
+        setExportingType(true);
+        // Small delay to allow react unmounts/renders if needed, though not strictly required
+        await new Promise(r => setTimeout(r, 50));
 
         try {
           const captureWidth = Math.max(1200, el.scrollWidth);
+          let linkParams = null;
+
           const canvas = await window.html2canvas(el, {
             scale: 2,
             backgroundColor: '#F8FAFC',
             windowWidth: captureWidth,
-            width: captureWidth
+            width: captureWidth,
+            onclone: (doc) => {
+              doc.body.classList.add('export-mode');
+              const clonedEl = doc.getElementById('manifest-export-container');
+              if (!clonedEl) return;
+
+              if (trip.details?.liveUrl && trip.details.liveUrl !== '#') {
+                const trackBtn = doc.getElementById('export-track-link');
+                if (trackBtn) {
+                  const elRect = clonedEl.getBoundingClientRect();
+                  const btnRect = trackBtn.getBoundingClientRect();
+                  linkParams = {
+                    relX: (btnRect.left - elRect.left) / elRect.width,
+                    relY: (btnRect.top - elRect.top) / elRect.height,
+                    relW: btnRect.width / elRect.width,
+                    relH: btnRect.height / elRect.height,
+                    url: trip.details.liveUrl
+                  };
+                }
+              }
+            }
           });
-          const link = document.createElement('a');
-          link.download = `Manifest_${localDetails.tripId}.jpg`;
-          link.href = canvas.toDataURL('image/jpeg', 0.9);
-          link.click();
-        } catch (e) { console.error('JPG Export error:', e); } finally {
-          document.body.classList.remove('export-mode');
+
+          const imgData = canvas.toDataURL('image/jpeg', 0.9);
+          setExportPreview({ imgData, canvasWidth: canvas.width, canvasHeight: canvas.height, linkParams });
+        } catch (e) { console.error('Export Error:', e); } finally {
+          setExportingType(false);
         }
       };
 
-      const downloadManifestAsPDF = async () => {
-        const el = document.getElementById('manifest-export-container');
-        if (!el) return;
-
-        document.body.classList.add('export-mode');
-        await new Promise(r => setTimeout(r, 150)); // Allow layout to snap to full width
-
-        try {
-          const captureWidth = Math.max(1200, el.scrollWidth);
-          const canvas = await window.html2canvas(el, {
-            scale: 2,
-            backgroundColor: '#F8FAFC',
-            windowWidth: captureWidth,
-            width: captureWidth
-          });
-          const imgData = canvas.toDataURL('image/jpeg', 0.9);
-          const orientation = canvas.width > canvas.height ? 'l' : 'p';
+      const handleDownloadExport = (type) => {
+        if (!exportPreview) return;
+        if (type === 'JPG') {
+          const link = document.createElement('a');
+          link.download = `Manifest_${localDetails.tripId}.jpg`;
+          link.href = exportPreview.imgData;
+          link.click();
+        } else {
+          const orientation = exportPreview.canvasWidth > exportPreview.canvasHeight ? 'l' : 'p';
           const pdf = new window.jspdf.jsPDF(orientation, 'mm', 'a4');
           const pdfWidth = pdf.internal.pageSize.getWidth();
-          const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-          pdf.addImage(imgData, 'JPEG', 0, 10, pdfWidth, pdfHeight);
-
-          // Embed clickable overlay for Tracking button if present
-          if (trip.details?.liveUrl && trip.details.liveUrl !== '#') {
-            const trackBtn = document.getElementById('export-track-link');
-            if (trackBtn) {
-              const elRect = el.getBoundingClientRect();
-              const btnRect = trackBtn.getBoundingClientRect();
-
-              const relX = (btnRect.left - elRect.left) / elRect.width;
-              const relY = (btnRect.top - elRect.top) / elRect.height;
-              const relW = btnRect.width / elRect.width;
-              const relH = btnRect.height / elRect.height;
-
-              pdf.link(relX * pdfWidth, 10 + (relY * pdfHeight), relW * pdfWidth, relH * pdfHeight, { url: trip.details.liveUrl });
-            }
+          const pdfHeight = (exportPreview.canvasHeight * pdfWidth) / exportPreview.canvasWidth;
+          pdf.addImage(exportPreview.imgData, 'JPEG', 0, 10, pdfWidth, pdfHeight);
+          if (exportPreview.linkParams) {
+            const { relX, relY, relW, relH, url } = exportPreview.linkParams;
+            pdf.link(relX * pdfWidth, 10 + (relY * pdfHeight), relW * pdfWidth, relH * pdfHeight, { url });
           }
-
           pdf.save(`Manifest_${localDetails.tripId}.pdf`);
-        } catch (e) { console.error('PDF Export error:', e); } finally {
-          document.body.classList.remove('export-mode');
         }
+        setExportPreview(null);
       };
 
       return (
@@ -901,15 +895,12 @@
               {/* Grid */}
 
               <div className="flex justify-end items-center mb-4 mt-2 fade-in">
-                <div className="flex gap-2">
-                  <button onClick={downloadManifestAsJPG} title="Download Image" className="px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-indigo-100 shadow-sm active:scale-95"><span>🖼️</span> Export JPG</button>
-                  <button onClick={downloadManifestAsPDF} title="Download PDF" className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold text-xs rounded-lg flex items-center gap-1 transition-colors border border-rose-100 shadow-sm active:scale-95"><span>📄</span> Export PDF</button>
-                </div>
+                <button onClick={generateExportData} disabled={exportingType} className="px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-xs rounded-xl flex items-center gap-2 transition-colors border border-indigo-100 shadow-sm active:scale-95 disabled:opacity-50 min-w-[140px] justify-center">
+                  {exportingType ? <span className="animate-spin text-sm leading-none">↻</span> : <span className="text-sm">👁️</span>} {exportingType ? 'Generating Preview...' : 'Export Preview'}
+                </button>
               </div>
 
               <div id="manifest-export-container" className="bg-[#F8FAFC] p-4 -m-4 rounded-xl space-y-6 fade-in">
-                {/* Logo that only shows during export */}
-                <img src="logo.png" alt="Ninjacart Logo" className="export-show h-10 object-contain mx-auto mb-2" />
 
                 <div className="space-y-3">
 
@@ -930,7 +921,7 @@
                           </div>
                           <div className="text-right min-w-0 export-hide-supplier">
                             <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Supplier</div>
-                            <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.supplier}>{localDetails.supplier}</div>
+                            <div className="text-sm font-bold text-slate-700 truncate pb-1" title={localDetails.supplier}>{localDetails.supplier}</div>
                           </div>
                         </div>
                       </div>
@@ -943,7 +934,7 @@
                         <div className="flex items-start justify-between gap-4">
                           <div className="min-w-0">
                             <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Customer / DT</div>
-                            <div className="text-sm font-bold text-slate-700 truncate" title={localDetails.dtName || '—'}>{localDetails.dtName || '—'}</div>
+                            <div className="text-sm font-bold text-slate-700 truncate pb-1" title={localDetails.dtName || '—'}>{localDetails.dtName || '—'}</div>
                           </div>
                           <div className="text-right">
                             <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Destination</div>
@@ -1324,6 +1315,32 @@
                         className="w-full px-3 py-2 text-sm text-slate-700 border border-slate-200 rounded-xl focus:border-emerald-400 focus:outline-none resize-none bg-slate-50"
                       />
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Export Preview Modal */}
+          {exportPreview && (
+            <div className="fixed inset-0 bg-slate-900/80 z-[200] flex items-center justify-center p-4 lg:p-10 fade-in backdrop-blur-sm overflow-y-auto">
+              <div className="bg-white rounded-2xl overflow-hidden max-w-[1100px] w-full flex flex-col shadow-2xl border border-slate-700 h-full max-h-full">
+                <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center shrink-0">
+                  <h3 className="font-bold flex items-center gap-2">👁️ Export Preview</h3>
+                  <button onClick={() => setExportPreview(null)} className="text-slate-400 hover:text-white transition-colors bg-white/10 hover:bg-white/20 rounded-full w-8 h-8 flex items-center justify-center font-bold">✕</button>
+                </div>
+                <div className="p-4 bg-slate-200 flex-1 overflow-auto flex justify-center items-start border-b border-slate-200">
+                  <img src={exportPreview.imgData} alt="Preview" className="max-w-full shadow-lg border border-slate-300 rounded object-contain bg-white h-auto" />
+                </div>
+                <div className="px-6 py-4 bg-slate-50 flex justify-between items-center shrink-0">
+                  <button onClick={() => setExportPreview(null)} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-xl transition-colors">Cancel</button>
+                  <div className="flex gap-3">
+                    <button onClick={() => handleDownloadExport('JPG')} className="px-6 py-2.5 text-sm font-bold text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-2 border border-indigo-200">
+                      <span>🖼️</span> Download JPG
+                    </button>
+                    <button onClick={() => handleDownloadExport('PDF')} className="px-6 py-2.5 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-2">
+                      <span>📄</span> Download PDF
+                    </button>
                   </div>
                 </div>
               </div>
