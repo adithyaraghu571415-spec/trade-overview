@@ -145,14 +145,70 @@
       } catch { return d; }
     };
 
-    const weatherFor = (city = '') => {
-      const c = city.toLowerCase();
-      if (c.includes('bangalore') || c.includes('bengaluru')) return { temp: '24°C', cond: 'Cloudy', icon: '☁️', alert: '' };
-      if (c.includes('mumbai')) return { temp: '29°C', cond: 'Rain', icon: '🌧️', alert: 'Rain Risk' };
-      if (c.includes('delhi') || c.includes('nokhra')) return { temp: '34°C', cond: 'Sunny', icon: '☀️', alert: 'High Heat' };
-      if (c.includes('chennai')) return { temp: '30°C', cond: 'Humid', icon: '💨', alert: '' };
-      return { temp: '27°C', cond: 'Clear', icon: '🌤️', alert: '' };
+    const CITY_COORDS = {
+      'bengaluru': { lat: 12.9716, lon: 77.5946 },
+      'bangalore': { lat: 12.9716, lon: 77.5946 },
+      'chennai': { lat: 13.0827, lon: 80.2707 },
+      'hyderabad': { lat: 17.3850, lon: 78.4867 },
+      'madurai': { lat: 9.9252, lon: 78.1198 },
+      'panruti': { lat: 11.7700, lon: 79.5500 },
+      'cochin': { lat: 9.9312, lon: 76.2673 },
+      'kochi': { lat: 9.9312, lon: 76.2673 },
+      'coimbatore': { lat: 11.0168, lon: 76.9558 },
+      'trichy': { lat: 10.7905, lon: 78.7047 },
+      'mumbai': { lat: 19.0760, lon: 72.8777 },
+      'delhi': { lat: 28.6139, lon: 77.2090 },
     };
+
+    const WMO_MAP = {
+      0: { cond: 'Clear Sky', icon: '☀️' },
+      1: { cond: 'Mainly Clear', icon: '🌤️' },
+      2: { cond: 'Partly Cloudy', icon: '⛅' },
+      3: { cond: 'Overcast', icon: '☁️' },
+      45: { cond: 'Foggy', icon: '🌫️' }, 48: { cond: 'Rime Fog', icon: '🌫️' },
+      51: { cond: 'Light Drizzle', icon: '🌦️' }, 53: { cond: 'Drizzle', icon: '🌦️' }, 55: { cond: 'Heavy Drizzle', icon: '🌦️' },
+      61: { cond: 'Slight Rain', icon: '🌧️' }, 63: { cond: 'Moderate Rain', icon: '🌧️' }, 65: { cond: 'Heavy Rain', icon: '🌧️' },
+      80: { cond: 'Rain Showers', icon: '🌦️' }, 81: { cond: 'Rain Showers', icon: '🌦️' }, 82: { cond: 'Violent Showers', icon: '🌧️' },
+      95: { cond: 'Thunderstorm', icon: '⛈️' },
+    };
+
+    async function fetchWeather(city = '', dateStr = '') {
+      const c = city.toLowerCase().trim();
+      const coords = CITY_COORDS[c] || CITY_COORDS['bengaluru'];
+      const date = dateStr ? new Date(dateStr) : new Date();
+      const now = new Date();
+      const diffDays = Math.ceil((date - now) / (1000 * 60 * 60 * 24));
+
+      const isPast = diffDays < 0;
+      const isTooFuture = diffDays > 14;
+
+      let url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&daily=weather_code,temperature_2m_max&timezone=auto`;
+
+      if (dateStr) {
+        const yyyymmdd = date.toISOString().split('T')[0];
+        url += `&start_date=${yyyymmdd}&end_date=${yyyymmdd}`;
+      }
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.daily) throw new Error('No weather data');
+
+        const code = data.daily.weather_code[0];
+        const temp = Math.round(data.daily.temperature_2m_max[0]);
+        const look = WMO_MAP[code] || { cond: 'Clear', icon: '🌤️' };
+
+        return {
+          temp: `${temp}°C`,
+          cond: look.cond,
+          icon: look.icon,
+          alert: (code >= 60) ? 'Rain Risk' : ''
+        };
+      } catch (err) {
+        console.error('Weather error:', err);
+        return { temp: '--°C', cond: 'Unknown', icon: '🌤️', alert: '' };
+      }
+    }
 
     const ZONE_STYLES = [
       { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-800', badge: 'bg-indigo-100 text-indigo-700' },
@@ -453,6 +509,7 @@
         eta: trip.details.eta, dtName: trip.details.dtName,
       });
       const [tripNotes, setTripNotes] = useState(trip.details.notes || '');
+      const [weather, setWeather] = useState({ temp: '--', cond: 'Loading...', icon: '⏳', alert: '' });
 
       const [activeTab, setActiveTab] = useState(['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(trip.details.status) ? 'market' : 'dashboard');
 
@@ -490,7 +547,18 @@
         setActiveTab(['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(trip.details.status) ? 'market' : 'dashboard');
       }, [trip.details.tripId]);
 
-      const w = weatherFor(localDetails.destination);
+      useEffect(() => {
+        let active = true;
+        const loadWeather = async () => {
+          setWeather({ temp: '--', cond: 'Loading...', icon: '⏳', alert: '' });
+          const res = await fetchWeather(localDetails.destination, localDetails.eta);
+          if (active) setWeather(res);
+        };
+        loadWeather();
+        return () => { active = false; };
+      }, [localDetails.destination, localDetails.eta]);
+
+      const w = weather;
 
       const totals = useMemo(() => {
         const g = {}; let grand = 0; let recvGrand = 0; let gross = 0;
