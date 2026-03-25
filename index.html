@@ -145,70 +145,14 @@
       } catch { return d; }
     };
 
-    const CITY_COORDS = {
-      'bengaluru': { lat: 12.9716, lon: 77.5946 },
-      'bangalore': { lat: 12.9716, lon: 77.5946 },
-      'chennai': { lat: 13.0827, lon: 80.2707 },
-      'hyderabad': { lat: 17.3850, lon: 78.4867 },
-      'madurai': { lat: 9.9252, lon: 78.1198 },
-      'panruti': { lat: 11.7700, lon: 79.5500 },
-      'cochin': { lat: 9.9312, lon: 76.2673 },
-      'kochi': { lat: 9.9312, lon: 76.2673 },
-      'coimbatore': { lat: 11.0168, lon: 76.9558 },
-      'trichy': { lat: 10.7905, lon: 78.7047 },
-      'mumbai': { lat: 19.0760, lon: 72.8777 },
-      'delhi': { lat: 28.6139, lon: 77.2090 },
+    const weatherFor = (city = '') => {
+      const c = city.toLowerCase();
+      if (c.includes('bangalore') || c.includes('bengaluru')) return { temp: '24°C', cond: 'Cloudy', icon: '☁️', alert: '' };
+      if (c.includes('mumbai')) return { temp: '29°C', cond: 'Rain', icon: '🌧️', alert: 'Rain Risk' };
+      if (c.includes('delhi') || c.includes('nokhra')) return { temp: '34°C', cond: 'Sunny', icon: '☀️', alert: 'High Heat' };
+      if (c.includes('chennai')) return { temp: '30°C', cond: 'Humid', icon: '💨', alert: '' };
+      return { temp: '27°C', cond: 'Clear', icon: '🌤️', alert: '' };
     };
-
-    const WMO_MAP = {
-      0: { cond: 'Clear Sky', icon: '☀️' },
-      1: { cond: 'Mainly Clear', icon: '🌤️' },
-      2: { cond: 'Partly Cloudy', icon: '⛅' },
-      3: { cond: 'Overcast', icon: '☁️' },
-      45: { cond: 'Foggy', icon: '🌫️' }, 48: { cond: 'Rime Fog', icon: '🌫️' },
-      51: { cond: 'Light Drizzle', icon: '🌦️' }, 53: { cond: 'Drizzle', icon: '🌦️' }, 55: { cond: 'Heavy Drizzle', icon: '🌦️' },
-      61: { cond: 'Slight Rain', icon: '🌧️' }, 63: { cond: 'Moderate Rain', icon: '🌧️' }, 65: { cond: 'Heavy Rain', icon: '🌧️' },
-      80: { cond: 'Rain Showers', icon: '🌦️' }, 81: { cond: 'Rain Showers', icon: '🌦️' }, 82: { cond: 'Violent Showers', icon: '🌧️' },
-      95: { cond: 'Thunderstorm', icon: '⛈️' },
-    };
-
-    async function fetchWeather(city = '', dateStr = '') {
-      const c = city.toLowerCase().trim();
-      const coords = CITY_COORDS[c] || CITY_COORDS['bengaluru'];
-      const date = dateStr ? new Date(dateStr) : new Date();
-      const now = new Date();
-      const diffDays = Math.ceil((date - now) / (1000 * 60 * 60 * 24));
-
-      const isPast = diffDays < 0;
-      const isTooFuture = diffDays > 14;
-
-      let url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&daily=weather_code,temperature_2m_max&timezone=auto`;
-
-      if (dateStr) {
-        const yyyymmdd = date.toISOString().split('T')[0];
-        url += `&start_date=${yyyymmdd}&end_date=${yyyymmdd}`;
-      }
-
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
-        if (!data.daily) throw new Error('No weather data');
-
-        const code = data.daily.weather_code[0];
-        const temp = Math.round(data.daily.temperature_2m_max[0]);
-        const look = WMO_MAP[code] || { cond: 'Clear', icon: '🌤️' };
-
-        return {
-          temp: `${temp}°C`,
-          cond: look.cond,
-          icon: look.icon,
-          alert: (code >= 60) ? 'Rain Risk' : ''
-        };
-      } catch (err) {
-        console.error('Weather error:', err);
-        return { temp: '--°C', cond: 'Unknown', icon: '🌤️', alert: '' };
-      }
-    }
 
     const ZONE_STYLES = [
       { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-800', badge: 'bg-indigo-100 text-indigo-700' },
@@ -259,9 +203,15 @@
           totalBoxes += qty;
           if (recv !== null) totalReceived += recv;
 
-          if (!marksMap.has(brand)) marksMap.set(brand, { id: `m-${idx}`, name: brand, grades: {} });
+          
 
-          marksMap.get(brand).grades[variety] = {
+          let key = brand;
+          while (marksMap.has(key) && marksMap.get(key).grades[variety] !== undefined) {
+             key += '\u200B';
+          }
+          if (!marksMap.has(key)) marksMap.set(key, { id: `m-${idx}`, name: key, grades: {} });
+          
+          marksMap.get(key).grades[variety] = {
             id: item.id, // Store manifest item id for patching
             manifest: qty,
             received: recv,
@@ -435,8 +385,6 @@
 
     // ─── FLEET CARD ───────────────────────────────────────────────
     function FleetCard({ trip, onClick }) {
-      const isTransit = ['DISPATCHED', 'IN TRANSIT'].includes(trip.details.status);
-      const isArrived = trip.details.status === 'ARRIVED MARKET';
       return (
         <div onClick={onClick}
           className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-lg hover:border-emerald-300 transition-all cursor-pointer group fade-in">
@@ -451,24 +399,30 @@
             <StatusBadge status={trip.details.status} />
           </div>
 
-          <div className="flex items-center justify-between mb-3 text-sm font-semibold text-slate-700">
-            <span>{trip.details.origin}</span>
-            <span className="text-slate-300 mx-2">→</span>
-            <span>{trip.details.destination}</span>
+          <div className="flex items-start justify-between mb-2 text-sm font-semibold text-slate-700">
+            <div className="flex flex-col gap-0.5">
+              <span>{trip.details.origin}</span>
+              {trip.details.supplier && trip.details.supplier !== '--' && (
+                <span className="text-[10px] font-bold text-slate-400 truncate max-w-[90px]">{trip.details.supplier}</span>
+              )}
+            </div>
+            <span className="text-slate-300 mx-2 mt-0.5">→</span>
+            <div className="flex flex-col gap-0.5 items-end">
+              <span>{trip.details.destination}</span>
+              {trip.details.dtName && (
+                <span className="text-[10px] font-bold text-indigo-400 truncate max-w-[90px]">{trip.details.dtName}</span>
+              )}
+            </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 border-t border-slate-100 pt-3 text-xs">
+          <div className="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3 text-xs">
             <div>
               <div className="text-slate-400 font-bold uppercase text-[10px] mb-0.5">Dispatch</div>
               <div className="font-bold text-slate-800">{fmtDate(trip.details.dispatchDate)}</div>
             </div>
-            <div>
-              <div className="text-slate-400 font-bold uppercase text-[10px] mb-0.5">Supplier</div>
-              <div className="font-bold text-slate-800 truncate">{trip.details.supplier}</div>
-            </div>
             <div className="text-right">
               <div className="text-slate-400 font-bold uppercase text-[10px] mb-0.5">Boxes</div>
-              <div className="font-black text-emerald-600 text-sm">{trip.totalBoxes}</div>
+              <div className="font-black text-emerald-600 text-sm">{trip.totalBoxes} 📦</div>
             </div>
           </div>
         </div>
@@ -504,12 +458,27 @@
       const [exportPreview, setExportPreview] = useState(null);
       const [exportingType, setExportingType] = useState(null);
       const [localDetails, setLocalDetails] = useState(trip.details);
+      const initCustDef = Array.isArray((() => {try{return JSON.parse(trip.details.notes||'{}')}catch{return {}}})()._customerAssignments) ? JSON.parse(trip.details.notes||'{}')._customerAssignments : [];
+      const _initialDtName = trip.details.dtName ? trip.details.dtName.split(',').map(s=>s.trim()).filter(Boolean) : [];
+      let initialAssignments = initCustDef;
+      if (initialAssignments.length === 0 && _initialDtName.length > 0) {
+         initialAssignments = _initialDtName.map(n => ({ id: Math.random().toString(), customerName: n, allocations: [] }));
+      }
       const [editData, setEditData] = useState({
         status: trip.details.status, destination: trip.details.destination,
-        eta: trip.details.eta, dtName: trip.details.dtName,
+        eta: trip.details.eta,
+        customerAssignments: initialAssignments,
+        customDtInput: '',
+        dtFocus: false
       });
       const [tripNotes, setTripNotes] = useState(trip.details.notes || '');
-      const [weather, setWeather] = useState({ temp: '--', cond: 'Loading...', icon: '⏳', alert: '' });
+
+      // ─── Customer Assignment State ─────────────────────────────
+      const [customerAssignments, setCustomerAssignments] = useState(() => {
+        try { const p = JSON.parse(trip.details.notes || '{}'); return Array.isArray(p._customerAssignments) ? p._customerAssignments : []; }
+        catch { return []; }
+      });
+      const [custPdfExporting, setCustPdfExporting] = useState(false);
 
       const [activeTab, setActiveTab] = useState(['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(trip.details.status) ? 'market' : 'dashboard');
 
@@ -526,7 +495,7 @@
       // Initialize/Sync local state when switching trips
       useEffect(() => {
         setLocalDetails(trip.details);
-        setEditData({ status: trip.details.status, destination: trip.details.destination, eta: trip.details.eta, dtName: trip.details.dtName });
+        setEditData({ status: trip.details.status, destination: trip.details.destination, eta: trip.details.eta, dtName: trip.details.dtName, customerAssignments: Array.isArray((() => {try{return JSON.parse(trip.details.notes||'{}')}catch{return {}}})()._customerAssignments) ? JSON.parse(trip.details.notes||'{}')._customerAssignments : [] });
         setExpenses({
           freight: trip.details.freight,
           coolie: trip.details.coolie,
@@ -545,20 +514,13 @@
         setShowStatusPrompt(false);
         setEditing(false); setSaveMsg('');
         setActiveTab(['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(trip.details.status) ? 'market' : 'dashboard');
+
+        // Re-load customer assignments for the new trip
+        try { const p = JSON.parse(trip.details.notes || '{}'); setCustomerAssignments(Array.isArray(p._customerAssignments) ? p._customerAssignments : []); }
+        catch { setCustomerAssignments([]); }
       }, [trip.details.tripId]);
 
-      useEffect(() => {
-        let active = true;
-        const loadWeather = async () => {
-          setWeather({ temp: '--', cond: 'Loading...', icon: '⏳', alert: '' });
-          const res = await fetchWeather(localDetails.destination, localDetails.eta);
-          if (active) setWeather(res);
-        };
-        loadWeather();
-        return () => { active = false; };
-      }, [localDetails.destination, localDetails.eta]);
-
-      const w = weather;
+      const w = weatherFor(localDetails.destination);
 
       const totals = useMemo(() => {
         const g = {}; let grand = 0; let recvGrand = 0; let gross = 0;
@@ -651,9 +613,12 @@
             if (eSales) throw eSales;
           }
 
-          // Save trip notes
-          if (tripNotes !== (trip.details.notes || '')) {
-            await supabase.from('trades').update({ notes: tripNotes }).eq('trip_id', localDetails.tripId);
+          // Save trip notes + customer assignments merged
+          const notesObj = (() => { try { return JSON.parse(trip.details.notes || '{}'); } catch { return {}; } })();
+          notesObj._customerAssignments = brandAssignments;
+          const mergedNotes = JSON.stringify(notesObj);
+          if (mergedNotes !== (trip.details.notes || '')) {
+            await supabase.from('trades').update({ notes: mergedNotes }).eq('trip_id', localDetails.tripId);
           }
 
           // Check if we should prompt for status bump
@@ -669,12 +634,43 @@
             commission: expenses.commission,
             otherExpenses: expenses.other,
             otherNote: expenses.note,
-            notes: tripNotes
+            notes: mergedNotes
           });
           setTimeout(() => setSaveMsg(''), 4000);
         } catch (e) {
           setSaveMsg('❌ ' + (e.message || 'Save failed'));
         } finally { setSaving(false); }
+      };
+
+      // Persist customer assignments in Supabase notes field
+      const saveCustomerAssignments = async (newAssignments) => {
+        setBrandAssignments(newAssignments);
+        try {
+          const notesObj = (() => { try { return JSON.parse(localDetails.notes || '{}'); } catch { return {}; } })();
+          notesObj._customerAssignments = newAssignments;
+          const merged = JSON.stringify(notesObj);
+          await supabase.from('trades').update({ notes: merged }).eq('trip_id', localDetails.tripId);
+          const updated = { ...localDetails, notes: merged };
+          setLocalDetails(updated); onUpdate(localDetails.tripId, updated);
+        } catch { /* silent */ }
+      };
+
+      const [custPdfData, setCustPdfData] = useState(null);
+      const captureHiddenCustomerPdf = async (customerObj) => {
+        setCustPdfExporting(customerObj.customerName);
+        setCustPdfData(customerObj);
+        await new Promise(r => setTimeout(r, 100)); // wait render
+        const el = document.getElementById('hidden-customer-export-container');
+        if (!el) return;
+        try {
+          const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: '#F8FAFC', width: 1000, windowWidth: 1000, onclone: doc => doc.body.classList.add('export-mode') });
+          const o = canvas.width > canvas.height ? 'l' : 'p';
+          const pdf = new window.jspdf.jsPDF(o, 'mm', 'a4');
+          pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 10, pdf.internal.pageSize.getWidth(), (canvas.height * pdf.internal.pageSize.getWidth()) / canvas.width);
+          pdf.save(`Manifest_${localDetails.tripId}_${(customerObj.customerName || 'Customer').replace(/\s+/g,'_')}.pdf`);
+          setSaveMsg(`✓ Downloaded PDF for ${customerObj.customerName || 'Customer'}`);
+          setTimeout(() => setSaveMsg(''), 4000);
+        } catch (e) { console.error(e); } finally { setCustPdfExporting(false); setCustPdfData(null); }
       };
 
       const saveEdits = async () => {
@@ -687,19 +683,45 @@
           if (!editData.eta) { setSaveMsg('❌ Arrival Date is required'); return; }
         }
         if (salesStart) {
-          if (!editData.dtName?.trim()) { setSaveMsg('❌ DT Name is required'); return; }
+          if ((editData.customerAssignments || []).length === 0) { setSaveMsg('❌ At least one Customer is required'); return; }
         }
 
         setSaving(true);
         try {
+          const notesObj = (() => { try { return JSON.parse(localDetails.notes || '{}'); } catch { return {}; } })();
+          
+          let finalCustomerAssignments = editData.customerAssignments || [];
+          let isMultiple = finalCustomerAssignments.length > 1;
+          
+          let finalDtName = finalCustomerAssignments.map(c => c.customerName).filter(Boolean).join(', ');
+
+          if (!isMultiple) {
+            finalCustomerAssignments = [{
+              id: (finalCustomerAssignments && finalCustomerAssignments.length === 1) ? finalCustomerAssignments[0].id : Date.now().toString(),
+              customerName: finalDtName || 'Unknown',
+              allocations: trip.marks.map(m => ({
+                id: m.name,
+                brand: m.name,
+                boxes: Object.values(m.grades).reduce((s, g) => s + g.manifest, 0).toString()
+              }))
+            }];
+            if (!finalDtName) finalDtName = 'Unknown';
+          }
+
+          notesObj._customerAssignments = finalCustomerAssignments;
+          const mergedNotes = JSON.stringify(notesObj);
+
           const { error } = await supabase.from('trades').update({
             status: toDbStatus(editData.status),
             destination_market: editData.destination,
             arrival_date: editData.eta || null,
-            dt_name: editData.dtName,
+            dt_name: finalDtName,
+            notes: mergedNotes
           }).eq('trip_id', localDetails.tripId);
+          
+          setCustomerAssignments(finalCustomerAssignments);
           if (error) throw error;
-          const updated = { ...localDetails, ...editData };
+          const updated = { ...localDetails, status: editData.status, destination: editData.destination, eta: editData.eta, dtName: finalDtName, notes: mergedNotes };
           setLocalDetails(updated);
           onUpdate(localDetails.tripId, updated);
           setEditing(false);
@@ -895,15 +917,259 @@
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
                         DT Name {['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
                       </label>
-                      <input type="text" value={editData.dtName} onChange={e => setEdit('dtName', e.target.value)}
-                        placeholder="Trader / Customer name"
-                        className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                      <div className="relative z-40" onBlur={e => {
+                        if (!e.currentTarget.contains(e.relatedTarget)) setEdit('dtFocus', false);
+                      }}>
+                        <div className="min-h-10 p-1.5 rounded-lg border border-slate-200 bg-white focus-within:border-emerald-400 flex flex-wrap gap-1.5 items-center cursor-text transition-colors shadow-inner"
+                             onClick={() => document.getElementById('dt-customer-input')?.focus()}>
+                          {(editData.customerAssignments || []).map((cust) => (
+                            <span key={cust.id} className="bg-amber-100 text-amber-900 border border-amber-200 text-[11px] font-black px-2 py-1 rounded-md flex items-center gap-1 shadow-sm uppercase tracking-wide">
+                              {cust.customerName}
+                              <button type="button" onClick={(e) => {
+                                e.stopPropagation();
+                                setEdit('customerAssignments', (editData.customerAssignments || []).filter(c => c.id !== cust.id));
+                              }} className="hover:bg-amber-200 text-amber-600 hover:text-amber-900 rounded-full w-4 h-4 flex items-center justify-center -mr-1 transition-colors">✕</button>
+                            </span>
+                          ))}
+                          <input id="dt-customer-input" type="text"
+                            value={editData.customDtInput || ''}
+                            onChange={e => {
+                               setEdit('customDtInput', e.target.value);
+                               setEdit('dtFocus', true);
+                            }}
+                            onFocus={() => { setEdit('dtFocus', true); }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && editData.customDtInput?.trim()) {
+                                e.preventDefault();
+                                setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: editData.customDtInput.trim(), allocations: [] }]);
+                                setEdit('customDtInput', '');
+                              }
+                            }}
+                            placeholder={(editData.customerAssignments || []).length ? '' : "Type or Select Customers..."}
+                            className="flex-1 min-w-[150px] outline-none text-sm font-semibold bg-transparent px-1 h-7 text-slate-800 placeholder-slate-400" />
+                        </div>
+                        
+                        {editData.dtFocus && (
+                          <div className="absolute top-full mt-2 left-0 w-full bg-white border border-slate-200 rounded-xl shadow-2xl max-h-64 overflow-y-auto pop-in z-50 py-1">
+                            {(() => {
+                               const CUSTOMER_OPTIONS = [
+                                  "SR Fruits", "MTR", "Selvam RD", "Sri Fruits", "AVN", "Chennai Fruits", 
+                                  "Thiruchendur murugan", "MNR Mayaan", "Annadatta", "Vamshi fruits", "Sai Karthik", 
+                                  "Santosh Fruit", "KRK", "CFC", "Gangothri", "VR Traders", "Akshay Ankush Shinde", 
+                                  "Anvesh Trading Co.", "Jay Ambey Fruits", "Shree Om Fruits", "Rajveer Singh", 
+                                  "Rajdhani Fruit Trader", "Fresh Frutz", "Waseem Ahmed Co."
+                               ];
+                               const selectedNames = (editData.customerAssignments || []).map(c => c.customerName.toLowerCase());
+                               let filtered = CUSTOMER_OPTIONS.filter(o => !selectedNames.includes(o.toLowerCase()));
+                               if (editData.customDtInput?.trim()) {
+                                  filtered = filtered.filter(o => o.toLowerCase().includes(editData.customDtInput.toLowerCase()));
+                               }
+                               
+                               return (
+                                <>
+                                  {filtered.map(d => (
+                                    <button key={d} type="button"
+                                      onClick={() => { 
+                                        setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: d, allocations: [] }]);
+                                        setEdit('customDtInput', '');
+                                        document.getElementById('dt-customer-input')?.focus();
+                                      }}
+                                      className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer border-b border-slate-50 last:border-0 transition-colors"
+                                    >
+                                      {d}
+                                    </button>
+                                  ))}
+                                  {editData.customDtInput?.trim() && !CUSTOMER_OPTIONS.some(o => o.toLowerCase() === editData.customDtInput.toLowerCase()) && (
+                                    <div className="px-4 py-2.5 text-xs text-slate-500 bg-slate-50 border-t border-slate-100 flex justify-between items-center cursor-pointer hover:bg-emerald-50 group transition-colors"
+                                         onMouseDown={(e) => e.preventDefault()}
+                                         onClick={() => {
+                                           setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: editData.customDtInput.trim(), allocations: [] }]);
+                                           setEdit('customDtInput', '');
+                                           document.getElementById('dt-customer-input')?.focus();
+                                         }}>
+                                      <span>Add custom customer: <strong className="text-slate-800 group-hover:text-emerald-800">{editData.customDtInput}</strong></span>
+                                      <span className="text-[9px] bg-slate-200 px-1.5 py-0.5 rounded text-slate-600 font-bold uppercase tracking-widest leading-none group-hover:bg-emerald-200 group-hover:text-emerald-800">Enter</span>
+                                    </div>
+                                  )}
+                                  {filtered.length === 0 && !editData.customDtInput?.trim() && (
+                                     <div className="px-4 py-3 text-xs text-slate-400 italic font-semibold text-center border-t border-slate-50">All options selected</div>
+                                  )}
+                                </>
+                               )
+                            })()}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 pt-1">
+                  {/* -- CUSTOMER ASSIGNMENT PANEL -- */}
+              {(editData.customerAssignments || []).length > 1 && (
+              <div className="bg-white rounded-xl border border-slate-200 overflow-visible mt-6 border-t-2 border-slate-100 pt-6">
+                <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                  <h2 className="text-sm font-black text-slate-800 tracking-tight">📦 ALLOCATE MARKAS TO CUSTOMERS</h2>
+                </div>
+                <div className="p-4 space-y-4">
+                  {/* Calculate unallocated totals for reference */}
+                  {(() => {
+                    const brandTotals = {};
+                    trip.marks.forEach(m => {
+                      const bn = m.name;
+                      brandTotals[bn] = Object.values(m.grades).reduce((s, g) => s + g.manifest, 0);
+                    });
+                    const allocatedTotals = {};
+                    (editData.customerAssignments || []).forEach(c => {
+                      c.allocations.forEach(a => {
+                        allocatedTotals[a.brand] = (allocatedTotals[a.brand] || 0) + (parseInt(a.boxes) || 0);
+                      });
+                    });
+                    
+                    return (
+                      <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Unallocated Truck Balance</div>
+                        <div className="flex flex-wrap gap-2">
+                          {trip.marks.length === 0 && <span className="text-xs text-slate-400">No brands in manifest</span>}
+                          {trip.marks.map(m => {
+                            const bn = m.name;
+                            const remaining = (brandTotals[bn] || 0) - (allocatedTotals[bn] || 0);
+                            const isOver = remaining < 0;
+                            const isDone = remaining === 0;
+                            return (
+                              <div key={bn} className={`px-2 py-1 rounded text-xs font-bold border ${isOver ? 'bg-red-50 text-red-600 border-red-200' : isDone ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-white text-slate-600 border-slate-200'}`}>
+                                {bn.split(' - ').pop()}: {remaining} bx
+                                {isOver && ' (Over)'}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+
+
+                  <div className="flex flex-col border border-slate-200 rounded-xl bg-white shadow-sm divide-y divide-slate-100 relative">
+                    {(editData.customerAssignments || []).map((cust, cIdx) => (
+                      <div key={cust.id} className="flex flex-col md:flex-row gap-4 p-4 hover:bg-slate-50/50 transition-colors items-start relative" style={{ zIndex: 100 - cIdx }}>
+                        
+                        {/* LEFT COLUMN: Name */}
+                        <div className="md:w-1/3 pt-3 flex items-center gap-2">
+                           <span className="text-xl opacity-80">🧑‍💼</span>
+                           <h3 className="text-sm font-black text-slate-800 line-clamp-2">{cust.customerName || `Customer ${cIdx + 1}`}</h3>
+                        </div>
+                        
+                        {/* RIGHT COLUMN: Marka Tags & Select */}
+                        <div className="md:w-2/3 flex-1 w-full">
+                           <div className="relative z-30" onBlur={e => {
+                             if (!e.currentTarget.contains(e.relatedTarget)) setEdit(`markaFocus_${cIdx}`, false);
+                           }}>
+                             <div className="min-h-12 p-2 rounded-xl border border-slate-200 bg-white focus-within:border-emerald-400 flex flex-wrap gap-2 items-center cursor-text transition-colors shadow-inner"
+                                  onClick={() => document.getElementById(`marka-input-${cIdx}`)?.focus()}>
+                               
+                               {/* Empty state pill hint */}
+                               {cust.allocations.length === 0 && !editData[`markaFocus_${cIdx}`] && (
+                                  <span className="text-xs font-semibold text-slate-400 italic px-2 absolute pointer-events-none">Select Markas to allocate...</span>
+                               )}
+                               
+                               {/* Allocated Brands as Pills */}
+                               {cust.allocations.map((alloc, aIdx) => (
+                                 <div key={alloc.id || aIdx} className="bg-slate-50 border border-slate-200 flex items-stretch rounded-lg shadow-sm overflow-hidden group hover:border-emerald-300 transition-colors">
+                                   <div className="bg-slate-100 px-2 py-1.5 border-r border-slate-200 flex items-center justify-center">
+                                     <span className="text-[11px] font-black tracking-widest text-slate-700 uppercase max-w-[100px] truncate" title={alloc.brand}>{alloc.brand.split(' - ').pop()}</span>
+                                   </div>
+                                   <div className="flex items-center bg-white px-1 relative">
+                                     <input type="number" value={alloc.boxes} min={1}
+                                       onClick={e => e.stopPropagation()}
+                                       onChange={e => {
+                                          const upd = [...(editData.customerAssignments || [])];
+                                          upd[cIdx].allocations[aIdx].boxes = e.target.value;
+                                          setEdit('customerAssignments', upd);
+                                       }}
+                                       placeholder="Qty"
+                                       className="w-14 text-center text-[11px] font-black text-amber-700 outline-none placeholder-slate-300 py-1.5 focus:bg-amber-50 rounded" style={{MozAppearance: 'textfield'}} />
+                                     <span className="text-[9px] font-bold text-slate-400 mr-2 uppercase tracking-wide">bx</span>
+                                   </div>
+                                   <button type="button" onClick={(e) => {
+                                       e.stopPropagation();
+                                       const upd = [...(editData.customerAssignments || [])];
+                                       upd[cIdx].allocations = upd[cIdx].allocations.filter((_, i) => i !== aIdx);
+                                       setEdit('customerAssignments', upd);
+                                     }}
+                                     className="px-2.5 bg-slate-50 hover:bg-red-50 hover:text-red-500 text-slate-400 border-l border-slate-200 transition-colors flex items-center justify-center">
+                                     <span className="text-[10px] font-black">✕</span>
+                                   </button>
+                                 </div>
+                               ))}
+                               
+                               {/* Trigger Input */}
+                               <input id={`marka-input-${cIdx}`} type="text"
+                                 value="" readOnly
+                                 onFocus={() => { setEdit(`markaFocus_${cIdx}`, true); }}
+                                 className="flex-1 min-w-[50px] outline-none text-sm bg-transparent cursor-pointer h-8" />
+                             </div>
+                             
+                             {/* Dropdown Options */}
+                             {editData[`markaFocus_${cIdx}`] && (
+                               <div className="absolute top-full mt-2 left-0 w-[100%] max-w-[400px] bg-white border border-slate-200 rounded-xl shadow-2xl max-h-56 overflow-y-auto pop-in z-50 py-1">
+                                 {(() => {
+                                    const available = trip.marks.filter(m => !cust.allocations.some(a => a.brand === m.name));
+                                    if (available.length === 0) return <div className="px-4 py-3 text-xs text-slate-400 italic font-semibold text-center border-t border-slate-50">All brands selected</div>;
+                                    return available.filter(m => {
+                                       const total = Object.values(m.grades).reduce((s, g) => s + g.manifest, 0);
+                                       let allocated = 0;
+                                       (editData.customerAssignments || []).forEach(c => {
+                                         c.allocations.forEach(a => { if (a.brand === m.name) allocated += (parseInt(a.boxes) || 0); });
+                                       });
+                                       return (total - allocated) > 0;
+                                     }).map(m => {
+                                      const bn = m.name;
+                                      const total = Object.values(m.grades).reduce((s, g) => s + g.manifest, 0);
+                                      
+                                      const patternMatches = trip.loadingZones.filter(z => cleanBrandName(z.description) === cleanBrandName(bn));
+                                      const patternText = patternMatches.length > 0 ? patternMatches.map(z => z.name).join(', ') : '';
+
+                                      let allocated = 0;
+                                      (editData.customerAssignments || []).forEach(c => {
+                                        c.allocations.forEach(a => { if (a.brand === bn) allocated += (parseInt(a.boxes) || 0); });
+                                      });
+                                      const remaining = total - allocated;
+                                      
+                                      return (
+                                        <button key={bn} type="button"
+                                          onClick={() => {
+                                            const upd = [...(editData.customerAssignments || [])];
+                                            upd[cIdx].allocations.push({ id: Date.now().toString(), brand: bn, boxes: remaining.toString() });
+                                            setEdit('customerAssignments', upd);
+                                            setEdit(`markaFocus_${cIdx}`, false);
+                                          }}
+                                          className="w-full flex justify-between items-center px-4 py-2.5 hover:bg-emerald-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors group"
+                                        >
+                                          <div className="flex flex-col items-start truncate overflow-hidden pr-2">
+                                            <span className="text-sm font-bold text-slate-700 group-hover:text-emerald-700 truncate">{bn.split(' - ').pop()}</span>
+                                            {patternText && <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 group-hover:text-emerald-500 mt-0.5 truncate max-w-full">[{patternText}]</span>}
+                                          </div>
+                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded shadow-sm flex-shrink-0 ${remaining > 0 ? 'bg-slate-100 text-slate-600 border border-slate-200/50' : 'bg-red-50 text-red-600 border border-red-100'}`}>
+                                            {remaining > 0 ? `${remaining} bx rem.` : '0 bx rem.'}
+                                          </span>
+                                        </button>
+                                      );
+                                    });
+                                 })()}
+                               </div>
+                             )}
+                           </div>
+                        </div>
+                        
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              )}
+              
+                  <div className="flex items-center gap-3 pt-4 border-t border-slate-100 mt-4">
                     {saveMsg && <span className={`text-sm font-bold ${saveMsg.startsWith('✓') ? 'text-emerald-600' : 'text-red-500'}`}>{saveMsg}</span>}
                     <div className="flex gap-2 ml-auto">
-                      <button onClick={() => { setEditing(false); setEditData({ status: localDetails.status, destination: localDetails.destination, eta: localDetails.eta, dtName: localDetails.dtName }); }}
+                      <button onClick={() => { setEditing(false); setEditData({ status: localDetails.status, destination: localDetails.destination, eta: localDetails.eta, customerAssignments: customerAssignments, customDtInput: '', dtFocus: false }); }}
                         className="px-4 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50">Cancel</button>
                       <button onClick={saveEdits} disabled={saving}
                         className="px-4 py-2 text-sm font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors">
@@ -941,10 +1207,11 @@
                   ))}
                 </div>
                 {activeTab === 'dashboard' && (
-                  <div className="pb-2 pl-4">
+                  <div className="pb-2 pl-4 flex gap-2">
                     <button onClick={generateExportData} disabled={exportingType} className="px-4 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-[10px] uppercase tracking-widest rounded-lg flex items-center gap-2 transition-colors border border-indigo-100 shadow-sm active:scale-95 disabled:opacity-50 min-w-[130px] justify-center">
                       {exportingType ? <span className="animate-spin tracking-normal text-sm leading-none">↻</span> : <span className="text-sm tracking-normal">👁️</span>} {exportingType ? 'Previewing...' : 'Preview & Download'}
                     </button>
+                    
                   </div>
                 )}
               </div>
@@ -1406,6 +1673,28 @@
             </div>
           )}
 
+          {custPdfData && (
+            <div className="absolute top-0 left-[-9999px] z-0 bg-[#F8FAFC] w-[1000px] p-8 shadow-xl">
+              <div id="hidden-customer-export-container" className="bg-[#F8FAFC] rounded-xl space-y-6 block p-4 shadow-sm border border-slate-200">
+                <div className="text-center mb-4 pt-2 pb-4 border-b-2 border-slate-200">
+                  <div className="text-xl font-black text-slate-800 uppercase tracking-widest mt-3">Customer Manifest</div>
+                  <div className="text-sm font-bold text-indigo-600 uppercase tracking-widest mt-1">Bill To: {custPdfData.customerName || 'Customer'}</div>
+                </div>
+                <div className="space-y-4 pt-2">
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden break-inside-avoid shadow-sm">
+                    <div className="grid grid-cols-2 divide-x divide-slate-100 p-5">
+                      <div className="flex gap-4"><div className="text-3xl">🛻</div><div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Trip Details</p><p className="font-bold text-slate-800 text-lg leading-tight mt-1">{localDetails.tripId}</p><p className="font-bold text-slate-500 text-sm mt-0.5">{localDetails.vehicleNo}</p></div></div>
+                      <div className="flex gap-4 pl-5"><div className="text-3xl">📍</div><div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Route</p><p className="font-bold text-slate-800 text-lg leading-tight mt-1">{localDetails.origin} <span className="text-slate-300">→</span> {localDetails.destination}</p><p className="font-bold text-emerald-600 text-sm mt-0.5 whitespace-nowrap">📅 {fmtDate(localDetails.dispatchDate)}</p></div></div>
+                    </div>
+                  </div>
+                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden break-inside-avoid">
+                    <div className="px-5 py-3 bg-slate-800 text-white flex justify-between items-center"><h4 className="font-black text-sm uppercase tracking-widest text-slate-200">Assigned Inventory</h4><span className="text-xs font-bold bg-white/20 px-3 py-1 rounded-full">{custPdfData.allocations.reduce((s, b) => s + (parseInt(b.boxes)||0), 0)} Total Boxes</span></div>
+                    <table className="w-full text-left font-semibold"><thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200"><tr><th className="py-3 px-5">Brand / Mark</th><th className="py-3 px-5 text-right w-40">Assigned Quantity</th></tr></thead><tbody className="divide-y divide-slate-100 text-slate-800">{custPdfData.allocations.map((b, i) => (<tr key={i} className="hover:bg-slate-50"><td className="py-4 px-5 text-sm font-bold border-r border-slate-50">{b.brand ? b.brand.replace(/\u200B/g, '') : '—'}</td><td className="py-4 px-5 text-right text-base font-black bg-emerald-50 text-emerald-800">{parseInt(b.boxes)||0} 📦</td></tr>))}</tbody></table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           {/* Export Preview Modal */}
           {exportPreview && (
             <div className="fixed inset-0 bg-slate-900/80 z-[200] flex items-center justify-center p-4 lg:p-10 fade-in backdrop-blur-sm overflow-y-auto">
@@ -1423,9 +1712,16 @@
                     <button onClick={() => handleDownloadExport('JPG')} className="px-6 py-2.5 text-sm font-bold text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-2 border border-indigo-200">
                       <span>🖼️</span> Download JPG
                     </button>
-                    <button onClick={() => handleDownloadExport('PDF')} className="px-6 py-2.5 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-2">
-                      <span>📄</span> Download PDF
+                    <button onClick={() => handleDownloadExport('PDF')} className="px-6 py-2.5 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-2 border">
+                      <span>📄</span> Full Manifest PDF
                     </button>
+                    {customerAssignments.filter(c => c.customerName && c.allocations && c.allocations.length > 0).map((cust, i) => (
+                      <button key={i} onClick={() => captureHiddenCustomerPdf(cust)} disabled={custPdfExporting === cust.customerName} 
+                        className="px-6 py-2.5 text-sm font-bold text-violet-700 bg-violet-100 hover:bg-violet-200 rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-2 border disabled:opacity-50">
+                        {custPdfExporting === cust.customerName ? <span className="animate-spin text-lg leading-none">↻</span> : <span>📄</span>} 
+                        {custPdfExporting === cust.customerName ? 'Generating...' : `PDF: ${(cust.customerName || '').substring(0, 15)}`}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -1600,6 +1896,8 @@
       const [filterDates, setFilterDates] = useState([]);
       const [filterMarkets, setFilterMarkets] = useState([]);
       const [filterStatuses, setFilterStatuses] = useState([]);
+      const [filterSuppliers, setFilterSuppliers] = useState([]);
+      const [filterCustomers, setFilterCustomers] = useState([]);
       const [syncing, setSyncing] = useState(false);
       const [error, setError] = useState(null);
       const [lastSynced, setLastSynced] = useState(null);
@@ -1630,15 +1928,34 @@
           if (!trades?.length) { setAllTrips([]); throw new Error('No active trades found.'); }
 
           const ids = trades.map(t => t.trip_id);
-          const [mfstRes, expRes] = await Promise.all([
-            supabase.from('trade_manifest').select('*').in('trip_id', ids),
-            supabase.from('expenses').select('*').in('trip_id', ids)
-          ]);
+          
+          let allManifests = [];
+          let allExpenses = [];
+          
+          // Helper to fetch all rows bridging the 1000-row limit
+          const fetchAll = async (table) => {
+             let rows = [];
+             let from = 0;
+             const step = 999;
+             // Process chunks of ids because postgrest has URL length limits
+             for (let i = 0; i < ids.length; i += 100) {
+               const chunkIds = ids.slice(i, i + 100);
+               while (true) {
+                 const { data, error } = await supabase.from(table).select('*').in('trip_id', chunkIds).range(from, from + step);
+                 if (error) throw error;
+                 if (data && data.length > 0) rows.push(...data);
+                 if (!data || data.length <= step) break;
+                 from += step + 1;
+               }
+               from = 0;
+             }
+             return rows;
+          };
 
-          if (mfstRes.error) throw mfstRes.error;
-          if (expRes.error) throw expRes.error;
+          const mfstData = await fetchAll('trade_manifest');
+          const expData = await fetchAll('expenses');
 
-          const processed = processTrips(trades, mfstRes.data || [], expRes.data || []);
+          const processed = processTrips(trades, mfstData, expData);
           setAllTrips(processed);
           setLastSynced(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
         } catch (err) {
@@ -1653,14 +1970,26 @@
         return Array.from(set).sort();
       }, [allTrips]);
 
+      const suppliers = useMemo(() => {
+        const set = new Set(allTrips.map(t => t.details.supplier).filter(s => s && s !== '--'));
+        return Array.from(set).sort();
+      }, [allTrips]);
+
+      const customers = useMemo(() => {
+        const set = new Set(allTrips.map(t => t.details.dtName).filter(c => c && c.trim()));
+        return Array.from(set).sort();
+      }, [allTrips]);
+
       const filtered = useMemo(() => {
         return allTrips.filter(t => {
           const matchDate = filterDates.length ? filterDates.includes(t.details.dispatchDate) : true;
           const matchMarket = filterMarkets.length ? filterMarkets.includes(t.details.destination) : true;
           const matchStatus = filterStatuses.length ? filterStatuses.includes(t.details.status) : true;
-          return matchDate && matchMarket && matchStatus;
+          const matchSupplier = filterSuppliers.length ? filterSuppliers.includes(t.details.supplier) : true;
+          const matchCustomer = filterCustomers.length ? filterCustomers.includes(t.details.dtName) : true;
+          return matchDate && matchMarket && matchStatus && matchSupplier && matchCustomer;
         }).sort((a, b) => new Date(b.details.dispatchDate || 0) - new Date(a.details.dispatchDate || 0));
-      }, [allTrips, filterDates, filterMarkets, filterStatuses]);
+      }, [allTrips, filterDates, filterMarkets, filterStatuses, filterSuppliers, filterCustomers]);
 
       return (
         <div className="min-h-screen bg-[#F8FAFC] pb-10">
@@ -1683,8 +2012,13 @@
                   </span>
                 )}
                 {lastSynced && isOnline && <span className="text-xs text-slate-400 hidden sm:block">Synced {lastSynced}</span>}
-                <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
-                  {['fleet', 'view'].map(t => (
+                  <button onClick={sync} disabled={syncing}
+                    className={`flex items-center gap-1.5 h-10 px-4 py-2 rounded-lg text-sm font-bold border transition-all ${syncing ? 'bg-slate-50 text-slate-400 border-slate-200' : 'bg-slate-900 text-white hover:bg-emerald-600 border-transparent shadow-md'}`}>
+                    <span className={syncing ? 'animate-spin inline-block' : 'inline-block'}>↻</span>
+                    {syncing ? 'Syncing…' : 'Refresh'}
+                  </button>
+                  <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
+                    {['fleet', 'view'].map(t => (
                     <button key={t} onClick={() => {
                       if (t === 'view' && allTrips.length > 0) { if (!selectedId) setSelectedId(allTrips[0].details.tripId); }
                       setTab(t);
@@ -1711,10 +2045,10 @@
                     <h2 className="text-3xl font-black text-slate-900">Fleet Overview</h2>
                     <p className="text-slate-400 mt-1 text-sm">Active dispatches</p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto mt-4 sm:mt-0">
+                  <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto mt-4 sm:mt-0 max-w-full">
                     <button
-                      onClick={() => { setFilterDates([]); setFilterMarkets([]); setFilterStatuses([]); }}
-                      style={{ visibility: (filterDates.length || filterMarkets.length || filterStatuses.length) ? 'visible' : 'hidden' }}
+                      onClick={() => { setFilterDates([]); setFilterMarkets([]); setFilterStatuses([]); setFilterSuppliers([]); setFilterCustomers([]); }}
+                      style={{ visibility: (filterDates.length || filterMarkets.length || filterStatuses.length || filterSuppliers.length || filterCustomers.length) ? 'visible' : 'hidden' }}
                       className="text-xs font-bold text-red-500 hover:text-red-700 px-2 py-1 bg-red-50 rounded-lg border border-red-100 transition-colors h-10">
                       ✕ Clear All
                     </button>
@@ -1735,17 +2069,29 @@
                       onChange={setFilterStatuses}
                     />
 
+                    {suppliers.length > 0 && (
+                      <MultiSelect
+                        placeholder="All Suppliers"
+                        options={suppliers.map(s => ({ value: s, label: s }))}
+                        selected={filterSuppliers}
+                        onChange={setFilterSuppliers}
+                      />
+                    )}
+
+                    {customers.length > 0 && (
+                      <MultiSelect
+                        placeholder="All Customers"
+                        options={customers.map(c => ({ value: c, label: c }))}
+                        selected={filterCustomers}
+                        onChange={setFilterCustomers}
+                      />
+                    )}
+
                     <div className="bg-white px-3 py-2 h-10 flex items-center rounded-lg border border-slate-200 text-sm font-semibold whitespace-nowrap">
                       Found: <span className="text-emerald-600 ml-1">{filtered.length}</span>
                     </div>
 
 
-
-                    <button onClick={sync} disabled={syncing}
-                      className={`flex items-center gap-1.5 h-10 px-4 py-2 rounded-lg text-sm font-bold border transition-all ${syncing ? 'bg-slate-50 text-slate-400 border-slate-200' : 'bg-slate-900 text-white hover:bg-emerald-600 border-transparent shadow-md'}`}>
-                      <span className={syncing ? 'animate-spin inline-block' : 'inline-block'}>↻</span>
-                      {syncing ? 'Syncing…' : 'Refresh'}
-                    </button>
                   </div>
                 </div>
 
