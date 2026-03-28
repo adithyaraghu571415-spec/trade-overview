@@ -1,0 +1,1651 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Ninjacart – Source Load Capture</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+    rel="stylesheet" />
+  <style>
+    * {
+      -webkit-tap-highlight-color: transparent;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #f1f5f9;
+      overflow-x: hidden;
+    }
+
+    .spin {
+      animation: spin 1s linear infinite;
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .pop-in {
+      animation: popIn .25s cubic-bezier(.34, 1.56, .64, 1);
+    }
+
+    @keyframes popIn {
+      from {
+        opacity: 0;
+        transform: scale(.95)translateY(8px)
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1)translateY(0)
+      }
+    }
+
+    .slide-down {
+      animation: slideDown .2s ease;
+    }
+
+    @keyframes slideDown {
+      from {
+        opacity: 0;
+        transform: translateY(-8px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+    }
+
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 36px;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
+    .scrollbar-hide::-webkit-scrollbar {
+      display: none;
+    }
+
+    .scrollbar-hide {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    input:focus,
+    select:focus {
+      outline: none;
+    }
+
+    /* Bigger touch targets on mobile */
+    @media(max-width:640px) {
+      .touch-big {
+        min-height: 52px;
+        font-size: 16px;
+      }
+    }
+
+    /* Success overlay */
+    .success-overlay {
+      animation: flashIn .3s ease;
+    }
+
+    @keyframes flashIn {
+      from {
+        opacity: 0;
+        transform: scale(.9)
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1)
+      }
+    }
+
+    /* Premium Additions */
+    .shimmer {
+      background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes shimmer {
+      0% {
+        background-position: 200% 0;
+      }
+
+      100% {
+        background-position: -200% 0;
+      }
+    }
+
+    .slide-up-modal {
+      animation: slideUpModal 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes slideUpModal {
+      from {
+        transform: translateY(100%);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateY(0);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+    // ─── CONFIG ──────────────────────────────────────────────────
+    const SUPABASE_URL = 'https://oiyhrmvcsjxmnfofodhe.supabase.co';
+    const SUPABASE_KEY = 'sb_publishable_ol8Jx4QsNZ22v-C1zSBoNQ_AHLFAAFT';
+    // Single primary Gemini API key
+    const GEMINI_API_KEY = 'AIzaSyBiaTEl8Tl79nb0sboSh2J5H1C4Zr03EZE';
+    const GEMINI_MODEL = 'gemini-2.5-flash'; // User-requested primary model
+
+    const geminiRequest = async (body) => {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        const code = errBody?.error?.code || res.status;
+        const msg = errBody?.error?.message || '';
+        if (code === 429) throw new Error('quota');
+        throw new Error(`api_error:${code} ${msg}`.slice(0, 120));
+      }
+      return res;
+    };
+    const extractJSON = t => { const m = t.match(/```(?:json)?\s*([\s\S]*?)```/); return m ? m[1].trim() : t.trim(); };
+
+    const PRODUCTS = ['Pomegranate', 'Apples', 'Kinnow Orange', 'Mango', 'Others'];
+    const PRODUCT_EMOJI = { Pomegranate: '🍎', Apples: '🍏', 'Kinnow Orange': '🍊', Mango: '🥭', Others: '📦' };
+    const LOADING_PATTERNS = ['Driver Side', '2nd From Driver Side', 'Middle', '2nd From Last', 'Opening Side'];
+    const INDIAN_STATES = ['Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Chandigarh', 'Jammu and Kashmir', 'Ladakh', 'Puducherry'];
+    const DESTINATIONS = [];
+    const VENDORS = [];
+    const POM_VAR = ['SSSSS', 'SSSS', 'SSS', 'SS', 'S', 'SPL', 'A1', 'A2', 'A3', 'SB1', 'SB2', 'Loose A', 'Loose B', 'Super', 'Super 1', 'Super 2', 'K', 'MIX', 'Green', 'Goli', 'F1', 'F2', 'Others'];
+    const APPLE_VAR = ['L', 'M', 'S5L', 'ES5L', '240', '310', '7 LYR', 'Others'];
+    const KINNOW_VAR = ['42 Count', '45 Count', '54 Count', '60 Count', '72 Count', '84 Count', 'Others'];
+
+    const todayISO = () => new Date().toISOString().split('T')[0];
+    const fmtDate = (d) => {
+      if (!d) return '--';
+      const date = new Date(d);
+      if (isNaN(date.getTime())) return d;
+      const day = String(date.getDate()).padStart(2, '0');
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const year = date.getFullYear();
+      return `${day}/${month}/${year}`;
+    };
+    const fmtDateLong = (d) => {
+      if (!d) return '--';
+      const date = new Date(d);
+      if (isNaN(date.getTime())) return d;
+      const day = date.getDate();
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const month = monthNames[date.getMonth()];
+      const year = date.getFullYear();
+      return `${day} ${month} ${year}`;
+    };
+    // Capitalize first letter of every word
+    const toTitleCase = (str) => str.replace(/\b\w/g, c => c.toUpperCase());
+    const newBrand = () => ({ id: crypto.randomUUID?.() ?? Math.random().toString(36), name: '', vendorIndex: 0, loadingPattern: '', varieties: {} });
+    const freshHeader = () => ({ vendors: [{ vendorId: '', manualVendorName: '' }], vehicleNumber: '', driverName: '', driverMobile: '', traqoLink: '', dispatchDate: todayISO(), dispatchTime: '', arrivalDate: '', destination: '', manualDestination: '' });
+    const freshCosts = () => ({ transport: '', labour: '', packing: '', other: '' });
+
+    // ─── FIELD COMPONENTS ────────────────────────────────────────
+    const Lbl = ({ children }) => <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">{children}</p>;
+
+    // `req` = red * on label; `err` = red border when unfilled after submit attempt
+    const Inp = ({ label, req, err, className = '', ...p }) => (
+      <div>
+        {label && (
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+            {label}{req && <span className="text-red-400 font-bold">*</span>}
+          </p>
+        )}
+        <input {...p}
+          className={`w-full h-12 px-4 rounded-xl border text-slate-800 text-sm font-medium placeholder:text-slate-300
+            focus:ring-2 transition-all touch-big ${className}
+            ${err ? 'border-red-300 bg-red-50 focus:border-red-400 focus:ring-red-100' : 'border-slate-200 bg-white focus:border-blue-400 focus:ring-blue-100'}`} />
+      </div>
+    );
+
+    const Sel = ({ label, req, err, children, className = '', ...p }) => (
+      <div>
+        {label && (
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+            {label}{req && <span className="text-red-400 font-bold">*</span>}
+          </p>
+        )}
+        <select {...p}
+          className={`w-full h-12 px-4 rounded-xl border text-slate-700 text-sm font-medium
+            focus:ring-2 transition-all cursor-pointer touch-big ${className}
+            ${err ? 'border-red-300 bg-red-50 focus:border-red-400 focus:ring-red-100' : 'border-slate-200 bg-white focus:border-blue-400 focus:ring-blue-100'}`}>
+          {children}
+        </select>
+      </div>
+    );
+
+    const DateInput = ({ label, value, onChange, req, err, ...p }) => {
+      const displayVal = value ? fmtDate(value) : 'DD/MM/YYYY';
+      const dateRef = useRef();
+      const handleTrigger = () => {
+        if (dateRef.current) {
+          try {
+            if (dateRef.current.showPicker) dateRef.current.showPicker();
+            else dateRef.current.click();
+          } catch (e) {
+            dateRef.current.focus();
+          }
+        }
+      };
+      return (
+        <div className="relative cursor-pointer" onClick={handleTrigger}>
+          <Inp
+            label={label}
+            req={req}
+            err={err}
+            value={displayVal}
+            readOnly
+            {...p}
+            className={`cursor-pointer ${p.className || ''}`}
+          />
+          <input
+            ref={dateRef}
+            type="date"
+            value={value}
+            onChange={onChange}
+            className="absolute inset-0 w-full h-full opacity-0 pointer-events-none"
+          />
+        </div>
+      );
+    };
+
+    const Card = ({ color = 'blue', icon, title, children }) => {
+      const bg = { blue: 'bg-blue-50 border-blue-100', orange: 'bg-orange-50 border-orange-100', green: 'bg-green-50 border-green-100' }[color];
+      const ico = { blue: 'bg-blue-100 text-blue-600', orange: 'bg-orange-100 text-orange-600', green: 'bg-green-100 text-green-600' }[color];
+      return (
+        <div className={`rounded-2xl border p-5 space-y-4 ${bg}`}>
+          <div className="flex items-center gap-2.5">
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm ${ico}`}>{icon}</div>
+            <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wide">{title}</h3>
+          </div>
+          {children}
+        </div>
+      );
+    };
+
+    const GradePicker = ({ isOpen, onClose, varieties, selected, onApply }) => {
+      const [temp, setTemp] = useState({});
+      const [customInput, setCustomInput] = useState('');
+      useEffect(() => { if (isOpen) setTemp(selected); }, [isOpen, selected]);
+
+      const addCustom = () => {
+        if (!customInput.trim()) return;
+        const name = toTitleCase(customInput.trim());
+        setTemp(t => ({ ...t, [name]: { ...(t[name] || { qty: '', rate: '' }), manual: true } }));
+        setCustomInput('');
+      };
+
+      if (!isOpen) return null;
+      return (
+        <div className="fixed inset-0 z-[110] flex items-end sm:items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm pop-in">
+          <div className="w-full max-w-sm bg-white rounded-[2rem] shadow-2xl overflow-hidden slide-up-modal flex flex-col max-h-[80vh]">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
+              <div>
+                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Select Grades</h3>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Toggle multiple varieties to add</p>
+              </div>
+              <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-xl bg-slate-50 text-slate-400 hover:bg-slate-100 transition-all">✕</button>
+            </div>
+
+            <div className="px-5 py-3 border-b border-slate-50 flex gap-2">
+              <button
+                onClick={() => {
+                  const newT = { ...temp };
+                  varieties.forEach(v => { newT[v] = { ...(newT[v] || { qty: '', rate: '' }), manual: true }; });
+                  setTemp(newT);
+                }}
+                className="flex-1 h-9 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:bg-blue-50 hover:text-blue-600 transition-all active:scale-95">
+                Select All
+              </button>
+              <button
+                onClick={() => {
+                  const newT = { ...temp };
+                  varieties.forEach(v => { if (newT[v]) newT[v].manual = false; });
+                  setTemp(newT);
+                }}
+                className="flex-1 h-9 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:bg-red-50 hover:text-red-600 transition-all active:scale-95">
+                Deselect All
+              </button>
+            </div>
+
+            <div className="px-5 py-2 border-b border-slate-50 flex gap-2 bg-slate-50/50">
+              <input
+                type="text"
+                placeholder="Custom Grade Name..."
+                value={customInput}
+                onChange={e => setCustomInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addCustom()}
+                className="flex-1 h-10 px-3 rounded-xl border border-slate-200 text-xs font-bold focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+              />
+              <button
+                onClick={addCustom}
+                className="h-10 px-4 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest shadow-md shadow-blue-100 active:scale-95">
+                ＋ Add
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 grid grid-cols-2 gap-3 scrollbar-hide">
+              {/* Combine standard varieties with any custom ones in temp */}
+              {Array.from(new Set([...varieties, ...Object.keys(temp)])).sort().map(v => {
+                const isActive = temp[v]?.manual || parseFloat(temp[v]?.qty) > 0;
+                return (
+                  <button key={v}
+                    onClick={() => setTemp(t => ({ ...t, [v]: { ...(t[v] || { qty: '', rate: '' }), manual: !isActive } }))}
+                    className={`h-11 px-4 rounded-xl border text-[11px] font-black uppercase tracking-wider transition-all flex items-center justify-between
+                    ${isActive ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-100' : 'bg-white border-slate-100 text-slate-400 hover:border-slate-200'}`}>
+                    {v}
+                    {isActive && <span>✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="p-5 bg-slate-50 border-t border-slate-100">
+              <button onClick={() => { onApply(temp); onClose(); }}
+                className="w-full h-12 rounded-2xl bg-blue-600 text-white font-black text-sm shadow-xl shadow-blue-100 active:scale-95 transition-all">
+                Apply Selection
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ─── MAIN APP ─────────────────────────────────────────────────
+    function App() {
+      const [tradeMode, setTradeMode] = useState('Commission');
+      const [product, setProduct] = useState('Pomegranate');
+      const [source, setSource] = useState('');
+      const [header, setHeader] = useState(freshHeader);
+      const [costs, setCosts] = useState(freshCosts);
+      const [brands, setBrands] = useState([newBrand()]);
+      const [status, setStatus] = useState({ type: 'idle', msg: '' });
+      const [submitStatus, setSubmitStatus] = useState({ type: 'idle', msg: '' });
+      const [supabase, setSupabase] = useState(null);
+      const [masterSuppliers, setMasterSuppliers] = useState([]);
+      const [masterCustomers, setMasterCustomers] = useState([]);
+      const [allMarkets, setAllMarkets] = useState([]);
+
+      const fetchMasterData = useCallback(async (client) => {
+        try {
+          const { data: s } = await client.from('suppliers').select('*').order('name');
+          const { data: c } = await client.from('customers').select('*').order('name');
+          if (s) setMasterSuppliers(s);
+          if (c) {
+            setMasterCustomers(c);
+            setAllMarkets(Array.from(new Set(c.map(x => x.destination_market).filter(Boolean))).sort());
+          }
+        } catch (e) { console.error('Master data fetch error:', e); }
+      }, []);
+
+      const addMasterSupplier = async (name) => {
+        if (!name?.trim() || !supabase) return;
+        const cleanName = toTitleCase(name);
+        const { data, error } = await supabase.from('suppliers').insert([{ name: cleanName }]).select();
+        if (!error && data) {
+          await fetchMasterData(supabase);
+          return data[0];
+        }
+        return null;
+      };
+
+      const addMasterCustomer = async (name, market = '') => {
+        if (!supabase) return;
+        const cleanName = name ? toTitleCase(name) : '';
+        const cleanMarket = market ? toTitleCase(market) : '';
+        const { data, error } = await supabase.from('customers').insert([{ name: cleanName, destination_market: cleanMarket }]).select();
+        if (!error && data) {
+          await fetchMasterData(supabase);
+          return data[0];
+        }
+        return null;
+      };
+      const [pdfReady, setPdfReady] = useState(false);
+      const [scanIdx, setScanIdx] = useState(null);
+      const [scanning, setScanning] = useState(false);
+      const [scanStep, setScanStep] = useState(''); // 'uploading' | 'reading' | 'mapping' | ''
+      const [fullDocScanning, setFullDocScanning] = useState(false);
+      const [fullDocStep, setFullDocStep] = useState('');
+      const [ocrPreview, setOcrPreview] = useState(null); // holds extracted doc for review
+      const [showSuccess, setShowSuccess] = useState(null); // tripId on success
+      const [attempted, setAttempted] = useState(false);
+      const [geminiKey] = useState(GEMINI_API_KEY);
+      const [quotaCountdown, setQuotaCountdown] = useState(0);
+      const [pickerBrand, setPickerBrand] = useState(null); // id of brand being edited for grades
+      const quotaRetryRef = useRef(null);
+      const camRef = useRef(null);
+      const galRef = useRef(null);
+      const fullDocCamRef = useRef(null);
+      const fullDocGalRef = useRef(null);
+
+      const isOrder = tradeMode === 'Order';
+      const baseVarieties = product === 'Apples' ? APPLE_VAR : product === 'Kinnow Orange' ? KINNOW_VAR : product === 'Others' ? [] : POM_VAR;
+
+      // Load libraries once
+      useEffect(() => {
+        const loadScript = src => new Promise((res, rej) => {
+          if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+          const s = Object.assign(document.createElement('script'), { src, onload: res, onerror: rej });
+          document.body.appendChild(s);
+        });
+        (async () => {
+          try {
+            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+            await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js');
+            setPdfReady(true);
+            await loadScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js');
+            if (window.supabase) {
+              const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+              setSupabase(client);
+              fetchMasterData(client);
+            }
+          } catch { setStatus({ type: 'error', msg: 'Library load failed. Check internet connection.' }); }
+        })();
+      }, []);
+
+      // Auto-dismiss error/success messages after 8 seconds (skip quota errors)
+      useEffect(() => {
+        if (status.type === 'success') {
+          const t = setTimeout(() => setStatus({ type: 'idle', msg: '' }), 8000);
+          return () => clearTimeout(t);
+        }
+        if (status.type === 'error' && !status.isQuota) {
+          const t = setTimeout(() => setStatus({ type: 'idle', msg: '' }), 8000);
+          return () => clearTimeout(t);
+        }
+      }, [status]);
+
+      // Quota countdown: tick every second, clear when done
+      useEffect(() => {
+        if (quotaCountdown <= 0) return;
+        const t = setTimeout(() => setQuotaCountdown(c => c - 1), 1000);
+        return () => clearTimeout(t);
+      }, [quotaCountdown]);
+      useEffect(() => {
+        if (quotaCountdown === 0 && status.isQuota) {
+          setStatus({ type: 'idle', msg: '' });
+        }
+      }, [quotaCountdown]);
+
+      // ─── Helpers ─────────────────────────────
+      const setH = (k, v) => setHeader(p => ({ ...p, [k]: v }));
+      const addBrand = () => setBrands(b => [...b, newBrand()]);
+      const removeBrand = (id) => setBrands(b => b.filter(x => x.id !== id));
+      const updBrand = (id, k, v) => setBrands(b => b.map(x => x.id === id ? { ...x, [k]: v } : x));
+      const updVar = (id, code, type, val) => setBrands(b => b.map(x => {
+        if (x.id !== id) return x;
+        return { ...x, varieties: { ...x.varieties, [code]: { ...(x.varieties[code] || { qty: '', rate: '' }), [type]: val } } };
+      }));
+
+      const vendorName = header.vendors.length > 1
+        ? 'Multiple Suppliers'
+        : (header.vendors[0]?.vendorId === 'manual'
+          ? header.vendors[0].manualVendorName
+          : toTitleCase(masterSuppliers.find(x => x.id.toString() === header.vendors[0]?.vendorId)?.name || ''));
+
+      const totals = useMemo(() => {
+        let boxes = 0, value = 0;
+
+        // First map all brands with their values
+        const mappedBrands = brands.map(b => {
+          let bB = 0, bV = 0;
+          Object.values(b.varieties).forEach(({ qty = '', rate = '' }) => {
+            const q = parseFloat(qty) || 0, r = parseFloat(rate) || 0; bB += q; bV += q * r;
+          });
+          boxes += bB; value += bV;
+
+          const bVendor = header.vendors[b.vendorIndex] || header.vendors[0];
+          const vName = bVendor?.vendorId === 'manual' ? bVendor.manualVendorName : masterSuppliers.find(x => x.id.toString() === bVendor?.vendorId)?.name;
+
+          const destValue = header.destination === 'manual' ? header.manualDestination : header.destination;
+          return {
+            name: b.name || 'Unnamed',
+            vendorName: toTitleCase(vName || 'Unknown'),
+            boxes: bB,
+            value: bV,
+            destination: destValue,
+            loadingPattern: b.loadingPattern,
+            varieties: b.varieties // CRITICAL: Added for Summary Receipt breakdown
+          };
+        });
+
+        // Group the brands by their supplier
+        const breakdown = Object.values(mappedBrands.reduce((acc, brand) => {
+          if (!acc[brand.vendorName]) {
+            acc[brand.vendorName] = { vendorName: brand.vendorName, brands: [] };
+          }
+          if (brand.boxes > 0) {
+            acc[brand.vendorName].brands.push(brand);
+          }
+          return acc;
+        }, {})).filter(group => group.brands.length > 0);
+
+        const tripCost = Object.values(costs).reduce((a, v) => a + (parseFloat(v) || 0), 0);
+        return { boxes, value, breakdown, tripCost, total: value + tripCost };
+      }, [brands, costs, header.vendors, header.destination, header.manualDestination]);
+
+      // ─── RESET FORM ───────────────────────────
+      const resetForm = () => {
+        setProduct('Pomegranate');
+        setSource('');
+        setHeader(freshHeader());
+        setCosts(freshCosts());
+        setBrands([newBrand()]);
+        setTradeMode('Commission');
+        setStatus({ type: 'idle', msg: '' });
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      };
+
+      // ─── OCR ──────────────────────────────────
+      // Fuzzy variety matcher: finds the canonical grade for a raw handwritten label
+      const matchVariety = (raw, canonicalList) => {
+        const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const rawN = norm(raw);
+        const direct = canonicalList.find(v => norm(v) === rawN);
+        if (direct) return direct;
+        const ALIASES = {
+          // Super grades
+          'super1': 'Super 1', 'sup1': 'Super 1', 'supper1': 'Super 1',
+          'super2': 'Super 2', 'sup2': 'Super 2', 'supper2': 'Super 2',
+          // S-grades map to themselves (normalised)
+          'sssss': 'SSSSS', 'ssss': 'SSSS', 'sss': 'SSS', 'ss': 'SS', 's': 'S',
+          // SPL
+          'spl': 'SPL', 'specl': 'SPL', 'special': 'SPL',
+          // A-grades
+          'a1': 'A1', 'a2': 'A2', 'a3': 'A3',
+          // SB-grades
+          'sb1': 'SB1', 'sb2': 'SB2',
+          // Loose
+          'la': 'Loose A', 'lb': 'Loose B', 'losea': 'Loose A', 'loseb': 'Loose B',
+          'loose': 'Loose A', 'lsa': 'Loose A', 'lsb': 'Loose B',
+          'loosea': 'Loose A', 'looseb': 'Loose B',
+          // Misc
+          'ygb': 'YGB', 'k': 'K', 'green': 'Green', 'goli': 'Goli',
+          'f1': 'F1', 'f2': 'F2', 'other': 'Others', 'others': 'Others',
+          // Super
+          'super': 'Super', 'super1': 'Super 1', 'super2': 'Super 2',
+          // Apple / Kinnow
+          'l': 'L', 'm': 'M', 's5l': 'S5L', 'es5l': 'ES5L',
+        };
+        const aliasHit = ALIASES[rawN];
+        if (aliasHit && canonicalList.includes(aliasHit)) return aliasHit;
+        const starts = canonicalList.find(v => norm(v).startsWith(rawN) || rawN.startsWith(norm(v)));
+        if (starts) return starts;
+        return null;
+      };
+
+      const triggerScan = (brandId, source) => {
+        setStatus({ type: 'idle', msg: '' }); // clear any lingering error
+        setScanIdx(brandId);
+        if (source === 'camera') camRef.current?.click();
+        else galRef.current?.click();
+      };
+
+      const handleScan = (e) => {
+        const file = e.target.files?.[0]; e.target.value = '';
+        if (!file || scanIdx === null) return;
+        setScanning(true);
+        setScanStep('uploading');
+        setStatus({ type: 'loading', msg: '📤 Uploading image…' });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          try {
+            setScanStep('reading');
+            setStatus({ type: 'loading', msg: '🔍 Reading manifest with AI…' });
+
+            const systemPrompt = `You are an expert at reading handwritten fruit dispatch manifests used by Ninjacart field agents in India.
+Your task: extract box quantities for each grade/variety from the image.
+
+Product: ${product}
+Allowed variety/grade keys (use ONLY these exact strings as JSON keys): ${JSON.stringify(varieties)}
+
+1. Map handwritten marks to allowed keys:
+   - 'Super', 'Sup', 'Super 1' → 'Super 1'
+   - 'SB', 'SB1' → 'SB1' | 'SB 2', 'SB2' → 'SB2'
+   - 'Mix', 'Mixed' → 'MIX'
+   - 'K', 'KG' → 'K'
+   - Map any other abbreviated marks to the closest key in the allowed list.
+2. Numbers may be written in a column format. Extract the INTEGER quantity for each grade.
+3. Ignore totals rows, vendor names, vehicle numbers, and dates.
+4. If a grade appears but its quantity is 0 or blank, do NOT include it in the JSON.
+5. Return ONLY a valid JSON object. No markdown, no explanations.
+
+Example output: {"SPL": 152, "SS": 111, "A1": 174}`;
+
+            const res = await geminiRequest({
+              contents: [{
+                parts: [
+                  { text: systemPrompt },
+                  { inlineData: { mimeType: file.type || 'image/jpeg', data: reader.result.split(',')[1] } }
+                ]
+              }],
+              generationConfig: { temperature: 0.1 }
+            });
+
+            const data = await res.json();
+            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!rawText) throw new Error('no_response');
+
+            setScanStep('mapping');
+            setStatus({ type: 'loading', msg: '🔗 Mapping grades to manifest…' });
+
+            let extracted;
+            try { extracted = JSON.parse(extractJSON(rawText)); }
+            catch { throw new Error('parse_error'); }
+
+            let mapped = 0;
+            const currentScanIdx = scanIdx;
+            setBrands(b => b.map(x => {
+              if (x.id !== currentScanIdx) return x;
+              const vars = { ...x.varieties };
+              Object.entries(extracted).forEach(([k, v]) => {
+                const qty = parseInt(v, 10);
+                if (!qty || qty <= 0) return;
+                const hit = varieties.includes(k) ? k : matchVariety(k, varieties);
+                if (hit) {
+                  vars[hit] = { qty: String(qty), rate: vars[hit]?.rate || '' };
+                  mapped++;
+                } else if (varieties.includes('Others')) {
+                  vars['Others'] = { qty: String(qty), rate: vars['Others']?.rate || '', customName: k };
+                  mapped++;
+                }
+              });
+              return { ...x, varieties: vars };
+            }));
+
+            if (mapped === 0) throw new Error('no_match');
+            setStatus({ type: 'success', msg: `✅ OCR complete — ${mapped} grade${mapped > 1 ? 's' : ''} filled in!` });
+          } catch (err) {
+            const errMsgs = {
+              no_key: '🔑 Please add your Gemini API key to use OCR.',
+              bad_key: '🔑 Built-in key expired. Tap "Use Own Key" at the bottom (free at aistudio.google.com).',
+              no_response: '⚠️ No response from AI. Try a clearer photo.',
+              parse_error: '⚠️ Could not parse AI response. Try again.',
+              no_match: '⚠️ Grades found but none matched. Try a clearer photo.',
+            };
+            const isQuota = err.message.startsWith('quota:') || err.message === 'quota';
+            if (isQuota) {
+              setQuotaCountdown(60);
+              setStatus({ type: 'error', isQuota: true, msg: `⏳ API quota exceeded. Retrying automatically in 60s, or add your own key below.` });
+            } else {
+              const apiErr = err.message.startsWith('api_error:') ? `⚠️ API error: ${err.message.replace('api_error:', '')}` : null;
+              setStatus({ type: 'error', msg: apiErr || errMsgs[err.message] || `⚠️ OCR failed: ${err.message}` });
+            }
+          } finally { setScanning(false); setScanStep(''); setScanIdx(null); }
+        };
+        reader.readAsDataURL(file);
+      };
+
+      // ─── FULL DOCUMENT OCR ────────────────────
+      const triggerFullDocScan = (src) => {
+        setStatus({ type: 'idle', msg: '' }); // clear any lingering error
+        if (src === 'camera') fullDocCamRef.current?.click();
+        else fullDocGalRef.current?.click();
+      };
+
+      const handleFullDocScan = (e) => {
+        const file = e.target.files?.[0]; e.target.value = '';
+        if (!file) return;
+        setFullDocScanning(true);
+        setFullDocStep('uploading');
+        setStatus({ type: 'loading', msg: '📤 Uploading document image…' });
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          try {
+            setFullDocStep('reading');
+            setStatus({ type: 'loading', msg: '🧠 AI is reading manifest…' });
+
+            const fullDocPrompt = `You are an expert at reading handwritten Indian fruit dispatch manifests/freight documents.
+Extract ALL details and return ONLY a valid JSON object:
+{
+  "vehicleNumber": "Registration number (e.g. GJ02AT0631) — no spaces",
+  "driverMobile": "Phone number digits only",
+  "dispatchDate": "YYYY-MM-DD",
+  "product": "One of: Pomegranate, Apples, Kinnow Orange, Mango, Others",
+  "destination": "Market/City name",
+  "brands": [
+    {
+      "name": "Brand/mark exactly as written (e.g. SB 2, MIX, K, Supper, VIP)",
+      "varieties": { "GradeName": "Quantity" }
+    }
+  ]
+}
+RULES:
+- Each column is a Brand. Header can be a name (e.g. 'HM') or a mark (e.g. 'K').
+- Row labels are Grades/Varieties. Extract the exact label seen (e.g. 'SSS', 'L', 'SB 2', 'MIX').
+- Map these to the 'varieties' object as key-value pairs (e.g. {"SSS": 10, "K": 5}).
+- Return ONLY JSON.`;
+
+            const res = await geminiRequest({
+              contents: [{
+                parts: [
+                  { text: fullDocPrompt },
+                  { inlineData: { mimeType: file.type || 'image/jpeg', data: reader.result.split(',')[1] } }
+                ]
+              }],
+              generationConfig: { temperature: 0.1 }
+            });
+
+            const data = await res.json();
+            const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!rawText) throw new Error('no_response');
+
+            setFullDocStep('review');
+            setStatus({ type: 'loading', msg: '🔍 Mapping grades & quantities…' });
+
+            let doc;
+            try { doc = JSON.parse(extractJSON(rawText)); }
+            catch { throw new Error('parse_error'); }
+
+            // Show review card instead of auto-filling directly
+            setOcrPreview(doc);
+            setStatus({ type: 'success', msg: '✅ Document scanned! Review the data below before applying.' });
+            setFullDocScanning(false); setFullDocStep('');
+            return; // Don't auto-fill yet — wait for user confirmation
+          } catch (err) {
+            const errMsgsFull = {
+              no_key: '🔑 Please add your Gemini API key to use OCR.',
+              bad_key: '🔑 Invalid API key. Tap "Update" at the bottom to fix it.',
+              no_response: '⚠️ No response from AI. Try a clearer photo.',
+              parse_error: '⚠️ Could not parse AI response. Try again.',
+              no_match: '⚠️ Document scanned but nothing could be mapped. Try a clearer photo.',
+            };
+            const quotaErrFull = err.message.startsWith('quota:') || err.message === 'quota';
+            if (quotaErrFull) {
+              setQuotaCountdown(60);
+              setStatus({ type: 'error', isQuota: true, msg: `⏳ API quota exceeded. Retrying automatically in 60s, or add your own key below.` });
+            } else {
+              const apiErrFull = err.message.startsWith('api_error:') ? `⚠️ API error: ${err.message.replace('api_error:', '')}` : null;
+              setStatus({ type: 'error', msg: apiErrFull || errMsgsFull[err.message] || `⚠️ Scan failed: ${err.message}` });
+            }
+          } finally { setFullDocScanning(false); setFullDocStep(''); }
+        };
+        reader.readAsDataURL(file);
+      };
+
+      // ── Confirm OCR Preview: apply extracted doc to form ──────────────────────
+      const confirmOcrPreview = () => {
+        const doc = ocrPreview;
+        if (!doc) return;
+        let filledCount = 0;
+        const detectedDest = doc.destination ? allMarkets.find(d => d.toLowerCase().includes(doc.destination.toLowerCase())) || null : null;
+        setHeader(prev => {
+          const next = { ...prev };
+          if (doc.vehicleNumber) { next.vehicleNumber = String(doc.vehicleNumber).toUpperCase(); filledCount++; }
+          if (doc.driverMobile) { next.driverMobile = String(doc.driverMobile); filledCount++; }
+          if (doc.dispatchDate && /^\d{4}-\d{2}-\d{2}$/.test(doc.dispatchDate)) { next.dispatchDate = doc.dispatchDate; filledCount++; }
+          if (detectedDest) { next.destination = detectedDest; filledCount++; }
+          return next;
+        });
+        if (Array.isArray(doc.brands) && doc.brands.length > 0) {
+          const POMAliases = {
+            'sss': 'SSS', 'ss': 'SS', 's': 'S', 'spl': 'SPL', 'special': 'SPL', 'specl': 'SPL',
+            'a1': 'A1', 'a2': 'A2', 'a3': 'A3', 'sb': 'SB1', 'sb1': 'SB1', 'sb2': 'SB2',
+            'losea': 'Loose A', 'loosea': 'Loose A', 'la': 'Loose A', 'lose': 'Loose A', 'loose': 'Loose A',
+            'loseb': 'Loose B', 'looseb': 'Loose B', 'lb': 'Loose B',
+            'f1': 'F1', 'f2': 'F2', 'super': 'Super', 'super1': 'Super 1', 'sup1': 'Super 1', 'super2': 'Super 2', 'sup2': 'Super 2',
+            'k': 'K', 'mix': 'MIX', 'mixed': 'MIX', 'green': 'Green', 'goli': 'Goli', 'others': 'Others', 'other': 'Others',
+          };
+          const newBrands = doc.brands.map(b => {
+            const vars = {};
+            if (b.varieties) {
+              Object.entries(b.varieties).forEach(([k, v]) => {
+                const qty = parseInt(v, 10);
+                if (!qty || qty <= 0) return;
+                const normK = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const currentVars = doc.product === 'Apples' ? APPLE_VAR : (doc.product === 'Kinnow Orange' ? KINNOW_VAR : POM_VAR);
+                const hit = currentVars.find(p => p.toLowerCase().replace(/[^a-z0-9]/g, '') === normK)
+                  || currentVars.find(p => POMAliases[normK] === p)
+                  || (POMAliases[normK] && currentVars.includes(POMAliases[normK]) ? POMAliases[normK] : null)
+                  || matchVariety(k, currentVars);
+
+                if (hit) {
+                  vars[hit] = { qty: String(qty), rate: '' };
+                } else if (currentVars.includes('Others')) {
+                  vars['Others'] = { qty: String(qty), rate: '', customName: k };
+                }
+              });
+            }
+            return { id: crypto.randomUUID?.() ?? Math.random().toString(36), name: (b.name || 'BRAND').toUpperCase(), loadingPattern: '', varieties: vars };
+          });
+          setBrands(newBrands);
+          filledCount += newBrands.length;
+        }
+        const brandNames = Array.isArray(doc.brands) ? doc.brands.map(b => b.name).join(', ') : '';
+        setOcrPreview(null);
+        setStatus({ type: 'success', msg: `✅ Applied! Filled ${filledCount} fields${brandNames ? ` · Brands: ${brandNames}` : ''}.` });
+      };
+
+      // ─── PDF ──────────────────────────────────
+      const downloadPDF = () => {
+        if (!pdfReady || !window.jspdf) { alert('PDF library loading…'); return; }
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+        const W = doc.internal.pageSize.getWidth();
+        const H = doc.internal.pageSize.getHeight();
+        const m = 18; // margin
+        const col = (W - m * 2) / 4;
+        let y = 20;
+
+        // ── Company name & doc title ──
+        doc.setFont(undefined, 'bold');
+        doc.setFontSize(18); doc.setTextColor(15, 23, 42);
+        doc.text('Ninjacart', m, y);
+        doc.setFont(undefined, 'normal');
+        doc.setFontSize(9); doc.setTextColor(100, 116, 139);
+        doc.text('Source Load Dispatch Sheet', m, y + 6);
+        doc.setFontSize(8); doc.setTextColor(100, 116, 139);
+        doc.text(fmtDate(new Date().toISOString().split('T')[0]), W - m, y + 6, { align: 'right' });
+
+        // ── Thin rule ──
+        y += 12;
+        doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.4);
+        doc.line(m, y, W - m, y);
+        y += 7;
+
+        // ── Trip meta: 4-column grid ──
+        const metaItems = [
+          ['Vendor', vendorName || '—'],
+          ['Vehicle', header.vehicleNumber || '—'],
+          ['Origin', source || '—'],
+          ['Dispatch', fmtDate(header.dispatchDate)],
+          ['Driver', header.driverName || '—'],
+          ['Mobile', header.driverMobile || '—'],
+          ['Mode', tradeMode],
+          ['ETA', header.arrivalDate ? fmtDate(header.arrivalDate) : '—'],
+        ];
+        metaItems.forEach(([k, v], i) => {
+          const x = m + col * (i % 4);
+          if (i % 4 === 0 && i > 0) y += 12;
+          doc.setFontSize(7); doc.setTextColor(148, 163, 184); doc.setFont(undefined, 'normal');
+          doc.text(k.toUpperCase(), x, y);
+          doc.setFontSize(9); doc.setTextColor(15, 23, 42); doc.setFont(undefined, 'bold');
+          doc.text(String(v), x, y + 5);
+        });
+        y += 16;
+
+        // ── Thin rule ──
+        doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.4);
+        doc.line(m, y, W - m, y);
+        y += 6;
+
+        // ── Manifest tables, one per brand ──
+        brands.forEach((brand, bi) => {
+          const dest = header.destination === 'manual'
+            ? (header.manualDestination || 'Custom')
+            : (header.destination || '—');
+          const rows = [];
+          varieties.forEach(code => {
+            const d = brand.varieties[code] || {};
+            const qty = parseFloat(d.qty) || 0;
+            if (qty > 0) {
+              const rate = parseFloat(d.rate) || 0;
+              const displayName = (code === 'Others' && d.customName) ? d.customName : code;
+              const r = [displayName, qty.toString()];
+              if (isOrder) r.push(`₹${rate.toLocaleString()}`, `₹${(qty * rate).toLocaleString()}`);
+              rows.push(r);
+            }
+          });
+          if (rows.length === 0) return;
+
+          const brandBoxes = rows.reduce((a, r) => a + (parseFloat(r[1]) || 0), 0);
+
+          // Brand identifier line
+          doc.setFontSize(8); doc.setFont(undefined, 'bold'); doc.setTextColor(37, 99, 235);
+          doc.text(`${brand.name || 'UNNAMED BRAND'}`, m, y);
+          doc.setFont(undefined, 'normal'); doc.setTextColor(100, 116, 139);
+          doc.text(`  →  ${dest}   ·   ${brand.loadingPattern}   ·   ${brandBoxes} boxes`, m + doc.getTextWidth(`${brand.name || 'UNNAMED BRAND'}`), y);
+          y += 4;
+
+          const head = isOrder
+            ? [['Variety / Grade', 'Boxes', 'Rate / Box', 'Total Value']]
+            : [['Variety / Grade', 'Boxes']];
+
+          doc.autoTable({
+            startY: y,
+            head: head,
+            body: rows,
+            theme: 'plain',
+            margin: { left: m, right: m },
+            headStyles: {
+              fillColor: [241, 245, 249],
+              textColor: [51, 65, 85],
+              fontSize: 7.5,
+              fontStyle: 'bold',
+              cellPadding: { top: 3, bottom: 3, left: 3, right: 3 },
+            },
+            bodyStyles: {
+              fontSize: 8.5,
+              textColor: [30, 41, 59],
+              cellPadding: { top: 2.5, bottom: 2.5, left: 3, right: 3 },
+            },
+            alternateRowStyles: { fillColor: [248, 250, 252] },
+            columnStyles: isOrder
+              ? { 0: { cellWidth: 'auto' }, 1: { cellWidth: 28, halign: 'center' }, 2: { cellWidth: 32, halign: 'right' }, 3: { cellWidth: 38, halign: 'right' } }
+              : { 0: { cellWidth: 'auto' }, 1: { cellWidth: 28, halign: 'center' } },
+            tableLineColor: [226, 232, 240],
+            tableLineWidth: 0.3,
+          });
+
+          y = doc.lastAutoTable.finalY + 8;
+
+          // Subtle divider between brands
+          if (bi < brands.length - 1) {
+            doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.3);
+            doc.line(m, y - 4, W - m, y - 4);
+          }
+        });
+
+        // ── Totals row ──
+        doc.setDrawColor(15, 23, 42); doc.setLineWidth(0.5);
+        doc.line(m, y, W - m, y);
+        y += 6;
+        doc.setFontSize(10); doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+        doc.text('Total Boxes Dispatched', m, y);
+        doc.text(`${totals.boxes}`, W - m, y, { align: 'right' });
+        if (isOrder && totals.total > 0) {
+          y += 6;
+          doc.setFontSize(9); doc.setFont(undefined, 'normal'); doc.setTextColor(100, 116, 139);
+          doc.text('Total Value (incl. expenses)', m, y);
+          doc.setFont(undefined, 'bold'); doc.setTextColor(15, 23, 42);
+          doc.text(`₹${totals.total.toLocaleString()}`, W - m, y, { align: 'right' });
+        }
+
+        // ── Footer ──
+        doc.setFontSize(7); doc.setTextColor(203, 213, 225); doc.setFont(undefined, 'normal');
+        doc.text(`Generated ${new Date().toLocaleString('en-GB')}  ·  Ninjacart Source Load Capture`, W / 2, H - 10, { align: 'center' });
+
+        doc.save(`LoadSheet_${(header.vehicleNumber || 'Draft').toUpperCase()}_${header.dispatchDate}.pdf`);
+      };
+
+      // ─── SUBMIT ───────────────────────────────
+      const submit = async () => {
+        setAttempted(true);
+        const missing = [
+          header.vendors.some(v => !v.vendorId || (v.vendorId === 'manual' && !v.manualVendorName)) && 'Vendor / Supplier',
+          !header.vehicleNumber && 'Vehicle No.',
+          !source && 'Origin State',
+          !header.dispatchDate && 'Dispatch Date',
+          !header.dispatchTime && 'Dispatch Time',
+          !header.arrivalDate && 'ETA (Arrival)',
+          !header.driverName && 'Driver Name',
+          !header.driverMobile && 'Driver Mobile',
+          !header.traqoLink && 'Tracking Link',
+          (!header.destination || (header.destination === 'manual' && !header.manualDestination)) && 'Destination',
+          brands.some(b => !b.name) && 'Brand Name',
+          brands.some(b => !b.loadingPattern) && 'Loading Pattern (per brand)',
+        ].filter(Boolean);
+        if (missing.length > 0) {
+          setSubmitStatus({ type: 'error', msg: `⚠️ Please fill in: ${missing.join(', ')}.` }); return;
+        }
+        if (!supabase) { setSubmitStatus({ type: 'error', msg: '⚠️ Not connected to database.' }); return; }
+        const tripId = `TRP-${Date.now().toString().slice(-6)}`;
+        setSubmitStatus({ type: 'loading', msg: 'Saving to database…' });
+        try {
+          const { error: e1 } = await supabase.from('trades').insert([{
+            trip_id: tripId, vendor_name: vendorName, trade_mode: tradeMode,
+            vehicle_number: header.vehicleNumber.toUpperCase(),
+            driver_name: header.driverName || 'Driver', driver_mobile: header.driverMobile,
+            tracking_link: header.traqoLink, source_location: source,
+            destination_market: (() => { const d = header.destination; return d === 'manual' ? (header.manualDestination || 'Custom') : d || 'Multiple'; })(),
+            dispatch_date: header.dispatchDate, dispatch_time: header.dispatchTime || null, arrival_date: header.arrivalDate || null,
+            status: 'DISPATCHED', total_boxes_dispatched: totals.boxes
+          }]);
+          if (e1) throw e1;
+          const mRows = [];
+          brands.forEach(b => {
+            const bVendor = header.vendors[b.vendorIndex] || header.vendors[0];
+            const vName = bVendor.vendorId === 'manual' ? bVendor.manualVendorName : masterSuppliers.find(x => x.id.toString() === bVendor.vendorId)?.name;
+            const finalBrandName = vName ? `${toTitleCase(vName)} - ${b.name}` : b.name;
+
+            Object.entries(b.varieties).forEach(([code, { qty = '' }]) => {
+              if (parseFloat(qty) > 0) mRows.push({ trip_id: tripId, commodity: product, brand_name: finalBrandName, variety_grade: code, quantity_boxes: parseFloat(qty), packing_type: b.loadingPattern });
+            });
+          });
+          if (mRows.length > 0) { const { error: e2 } = await supabase.from('trade_manifest').insert(mRows); if (e2) throw e2; }
+          const eRows = Object.entries(costs).filter(([, v]) => parseFloat(v) > 0).map(([k, v]) => ({ trip_id: tripId, expense_type: k.charAt(0).toUpperCase() + k.slice(1), amount: parseFloat(v), paid_by: 'Source', notes: '' }));
+          if (eRows.length > 0) { const { error: e3 } = await supabase.from('expenses').insert(eRows); if (e3) throw e3; }
+
+          setStatus({ type: 'idle', msg: '' });
+          setSubmitStatus({ type: 'idle', msg: '' });
+          setShowSuccess(tripId);
+        } catch (err) {
+          setSubmitStatus({ type: 'error', msg: `❌ Failed: ${err.message || err.details || 'Unknown error'}` });
+        }
+      };
+
+      // ─── SUCCESS OVERLAY ─────────────────────
+      if (showSuccess) return (
+        <div className="min-h-screen bg-blue-600 flex flex-col items-center justify-center px-6 text-center success-overlay">
+          <div className="text-7xl mb-6">✅</div>
+          <h1 className="text-2xl font-black text-white mb-2">Trip Submitted!</h1>
+          <p className="text-blue-200 font-semibold mb-1">Saved to database successfully</p>
+          <div className="mt-4 mb-8 px-5 py-3 bg-white/15 rounded-2xl border border-white/20">
+            <p className="text-xs text-blue-200 font-bold uppercase tracking-widest mb-1">Trip ID</p>
+            <p className="text-2xl font-black text-white tracking-wide">{showSuccess}</p>
+          </div>
+          <button onClick={() => { setShowSuccess(null); resetForm(); }}
+            className="w-full max-w-xs h-14 bg-white text-blue-600 font-black text-base rounded-2xl shadow-xl active:scale-95 transition-transform">
+            🔄 New Trip Entry
+          </button>
+        </div>
+      );
+
+      // ─── MAIN RENDER ─────────────────────────
+      return (
+        <>
+          <div className="min-h-screen bg-slate-100 pb-32">
+            <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={handleScan} className="hidden" />
+            <input ref={galRef} type="file" accept="image/*" onChange={handleScan} className="hidden" />
+            <input ref={fullDocCamRef} type="file" accept="image/*" capture="environment" onChange={handleFullDocScan} className="hidden" />
+            <input ref={fullDocGalRef} type="file" accept="image/*" onChange={handleFullDocScan} className="hidden" />
+
+            {/* ── STICKY NAV ── */}
+            <div className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+              <div className="max-w-lg mx-auto px-4 h-14 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-base">📦</div>
+                  <div>
+                    <div className="text-sm font-black text-slate-900 leading-tight">Ninjacart</div>
+                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Source Load Capture</div>
+                  </div>
+                </div>
+                {/* Mode toggle */}
+                <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                  {['Commission', 'Order'].map(m => (
+                    <button key={m} onClick={() => setTradeMode(m)}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-bold transition-all ${tradeMode === m ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500'}`}>
+                      {m === 'Commission' ? '🤝' : '🛍️'} {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="max-w-lg mx-auto px-4 py-5 space-y-4">
+
+
+
+
+
+              {/* ── SMART SCAN HEADER ── */}
+              <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-3 shadow-sm relative overflow-hidden group">
+                <div className="relative z-10 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-8 h-8 flex-shrink-0 bg-indigo-600 rounded-lg flex items-center justify-center text-sm shadow-md shadow-indigo-100 text-white">✨</div>
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <h2 className="text-sm font-black text-slate-800 leading-none truncate">Smart Scan</h2>
+                      <span className="text-[8px] font-bold text-indigo-400 uppercase tracking-wider truncate opacity-60">AI Capture</span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-1.5 flex-shrink-0">
+                    <button onClick={() => triggerFullDocScan('camera')}
+                      className="px-3 h-9 rounded-lg bg-indigo-600 text-white text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 active:scale-95 transition-all shadow-sm">
+                      <span>📷</span> Scan
+                    </button>
+                    <button onClick={() => triggerFullDocScan('gallery')}
+                      className="w-9 h-9 rounded-lg bg-white text-slate-400 border border-slate-200 text-xs flex items-center justify-center active:scale-95 transition-all shadow-sm">
+                      <span>🖼️</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── STATUS + ACTIONS ── */}
+              {status.type !== 'idle' && (
+                <div className={`px-5 py-4 rounded-2xl border text-sm font-bold flex items-center gap-3 slide-down shadow-sm
+                ${status.type === 'loading' ? 'bg-white border-indigo-100 text-indigo-600 shimmer'
+                    : status.type === 'success' ? 'bg-green-50/80 backdrop-blur-sm border-green-200 text-green-700'
+                      : 'bg-red-50/80 backdrop-blur-sm border-red-200 text-red-600'}`}>
+                  {status.type === 'loading' ? (
+                    <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100">
+                      <span className="spin text-lg">✨</span>
+                    </div>
+                  ) : (
+                    <div className={`flex items-center justify-center w-8 h-8 rounded-xl ${status.type === 'success' ? 'bg-green-100' : 'bg-red-100'}`}>
+                      <span>{status.type === 'success' ? '✅' : '⚠️'}</span>
+                    </div>
+                  )}
+                  <div className="flex-1 font-extrabold tracking-tight italic">
+                    {status.msg}
+                    {status.isQuota && quotaCountdown > 0 && (
+                      <span className="ml-2 not-italic font-black text-red-700 tabular-nums">({quotaCountdown}s)</span>
+                    )}
+                  </div>
+                  {status.type !== 'loading' && (
+                    <button onClick={() => { setStatus({ type: 'idle', msg: '' }); setQuotaCountdown(0); }} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/5 transition-colors">✕</button>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <Lbl>Select Product</Lbl>
+                <div className="flex gap-2 overflow-x-auto scrollbar-hide py-0.5">
+                  {PRODUCTS.map(p => (
+                    <button key={p} onClick={() => setProduct(p)}
+                      className={`flex-shrink-0 flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-bold border transition-all active:scale-95
+                      ${product === p ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200' : 'bg-white border-slate-200 text-slate-600'}`}>
+                      <span className="text-base">{PRODUCT_EMOJI[p]}</span> {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── TRIP DETAILS ── */}
+              <Card color="blue" icon="🚀" title="Trip Details">
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                        Vendor / Supplier<span className="text-red-400 font-bold">*</span>
+                      </p>
+                      <button onClick={() => setHeader(h => ({ ...h, vendors: [...h.vendors, { vendorId: '', manualVendorName: '' }] }))}
+                        className="text-[10px] font-black tracking-wide text-blue-600 hover:text-blue-700 bg-blue-50/50 border border-blue-200 px-2.5 py-1 rounded-lg transition-all active:scale-95 drop-shadow-sm uppercase">
+                        ＋ Add Supplier
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      {header.vendors.map((v, i) => (
+                        <div key={i} className="flex gap-2 items-start pop-in relative">
+                          <div className="flex-1 space-y-2">
+                            <select
+                              className={`w-full h-12 px-4 rounded-xl border text-slate-700 text-sm font-medium focus:ring-2 transition-all cursor-pointer touch-big 
+                                ${attempted && (!v.vendorId || (v.vendorId === 'manual' && !v.manualVendorName)) ? 'border-red-300 bg-red-50 focus:border-red-400 focus:ring-red-100' : 'border-slate-200 bg-white focus:border-blue-400 focus:ring-blue-100'}`}
+                              value={v.vendorId}
+                              onChange={e => {
+                                const newV = [...header.vendors];
+                                newV[i].vendorId = e.target.value;
+                                setH('vendors', newV);
+                              }}>
+                              <option value="" disabled>Select Vendor…</option>
+                              <option value="manual">✏️ Add New Supplier</option>
+                              {masterSuppliers.map(ven => <option key={ven.id} value={ven.id}>{toTitleCase(ven.name)}</option>)}
+                            </select>
+                            {v.vendorId === 'manual' && (
+                              <div className="pl-3 border-l-2 border-blue-300 slide-down space-y-2">
+                                <Inp type="text" placeholder="Vendor full name" value={v.manualVendorName}
+                                  onChange={e => {
+                                    const newV = [...header.vendors];
+                                    newV[i].manualVendorName = toTitleCase(e.target.value);
+                                    setH('vendors', newV);
+                                  }} />
+                                <button type="button" onClick={async () => {
+                                  const newS = await addMasterSupplier(v.manualVendorName);
+                                  if (newS) {
+                                    const newV = [...header.vendors];
+                                    newV[i].vendorId = newS.id.toString();
+                                    setH('vendors', newV);
+                                  }
+                                }} className="text-[10px] font-black text-blue-600 uppercase bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors">
+                                  + Save to Master List
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          {header.vendors.length > 1 && (
+                            <button onClick={() => setHeader(h => ({ ...h, vendors: h.vendors.filter((_, idx) => idx !== i) }))}
+                              className="w-12 h-12 flex-shrink-0 flex items-center justify-center rounded-xl border border-red-200 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-all shadow-sm active:scale-95 text-lg">
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <DateInput label="Dispatch Date" req err={attempted && !header.dispatchDate} value={header.dispatchDate} onChange={e => setH('dispatchDate', e.target.value)} />
+                    <Inp label="Dispatch Time" req err={attempted && !header.dispatchTime} type="time" value={header.dispatchTime} onChange={e => setH('dispatchTime', e.target.value)} />
+                    <DateInput label="ETA (Arrival)" req err={attempted && !header.arrivalDate} value={header.arrivalDate} onChange={e => setH('arrivalDate', e.target.value)} />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <Sel label="Origin State" req err={attempted && !source} value={source} onChange={e => setSource(e.target.value)}>
+                      <option value="" disabled>Select state…</option>
+                      {INDIAN_STATES.map(s => <option key={s}>{s}</option>)}
+                    </Sel>
+                    <Sel label="Destination" req err={attempted && (!header.destination || (header.destination === 'manual' && !header.manualDestination))} value={header.destination} onChange={e => setH('destination', e.target.value)}>
+                      <option value="" disabled>Destination…</option>
+                      {allMarkets.map(d => <option key={d}>{d}</option>)}
+                      <option value="manual">✏️ Add New Market</option>
+                    </Sel>
+                  </div>
+
+                  {header.destination === 'manual' && (
+                    <div className="slide-down space-y-2">
+                      <Inp
+                        type="text"
+                        placeholder="Enter market / city name"
+                        value={header.manualDestination}
+                        onChange={e => setH('manualDestination', toTitleCase(e.target.value))}
+                      />
+                      <button type="button" onClick={async () => {
+                        const newC = await addMasterCustomer('', header.manualDestination);
+                        if (newC) setH('destination', newC.destination_market);
+                      }} className="text-[10px] font-black text-blue-600 uppercase bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors">
+                        + Save to Master List
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <Inp label="Vehicle No." req err={attempted && !header.vehicleNumber} type="text" className="font-black uppercase tracking-wider" placeholder="MH01AB1234" value={header.vehicleNumber} onChange={e => setH('vehicleNumber', e.target.value)} />
+                    <Inp label="Driver Name" req err={attempted && !header.driverName} type="text" placeholder="Full name" value={header.driverName}
+                      onChange={e => setH('driverName', toTitleCase(e.target.value))} />
+                  </div>
+
+                  <Inp label="Driver Mobile" req err={attempted && !header.driverMobile} type="tel" placeholder="10-digit number" value={header.driverMobile} onChange={e => setH('driverMobile', e.target.value)} />
+                  <div>
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
+                      Tracking Link (Traqo)<span className="text-red-400 font-bold">*</span>
+                    </p>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400">🔗</span>
+                      <Inp err={attempted && !header.traqoLink} type="url" className="pl-9" placeholder="https://traqo.io/…" value={header.traqoLink} onChange={e => setH('traqoLink', e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              {/* ── ORDER EXPENSES ── */}
+              {isOrder && (
+                <Card color="orange" icon="💰" title="Order Expenses">
+                  <div className="grid grid-cols-2 gap-3">
+                    {['transport', 'labour', 'packing', 'other'].map(k => (
+                      <div key={k}>
+                        <Lbl>{k}</Lbl>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">₹</span>
+                          <Inp type="number" className="pl-7 font-bold" placeholder="0" value={costs[k]} onChange={e => setCosts(c => ({ ...c, [k]: e.target.value }))} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+
+              {/* ── MANIFEST HEADER ── */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-black text-slate-700 uppercase tracking-widest">Load Manifest</h2>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">
+                    {brands.length} {brands.length === 1 ? 'brand' : 'brands'} · {totals.boxes} boxes
+                  </p>
+                </div>
+                <button onClick={addBrand}
+                  className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-md shadow-blue-200 transition-all active:scale-95">
+                  ＋ Add Brand
+                </button>
+              </div>
+
+              {/* ── BRAND CARDS ── */}
+              {brands.map((brand, bi) => {
+                const brandBoxes = Object.values(brand.varieties).reduce((a, { qty = '' }) => a + (parseFloat(qty) || 0), 0);
+                const filled = brandBoxes > 0;
+                return (
+                  <div key={brand.id} className={`rounded-2xl border overflow-hidden bg-white pop-in ${filled ? 'border-blue-200 shadow-md shadow-blue-50' : 'border-slate-200 shadow-sm'}`}>
+
+                    {/* Header strip */}
+                    <div className={`px-4 py-3 flex items-center justify-between ${filled ? 'bg-gradient-to-r from-blue-600 to-blue-500' : 'bg-gradient-to-r from-slate-700 to-slate-600'}`}>
+                      <div className="flex items-center gap-3">
+                        <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+                          <span className="text-xs font-black text-white">{bi + 1}</span>
+                        </div>
+                        <div className="flex flex-col gap-1 w-32">
+                          <input type="text" placeholder="BRAND NAME" value={brand.name}
+                            onChange={e => updBrand(brand.id, 'name', e.target.value.toUpperCase())}
+                            className="bg-transparent text-sm font-black text-white placeholder:text-white/40 outline-none uppercase tracking-wider w-full" />
+                          {header.vendors.length > 1 && (
+                            <select
+                              value={brand.vendorIndex || 0}
+                              onChange={e => updBrand(brand.id, 'vendorIndex', parseInt(e.target.value))}
+                              className="bg-white/20 text-white text-[10px] font-bold px-1.5 py-0.5 rounded outline-none border-none">
+                              {header.vendors.map((v, i) => {
+                                const name = v.vendorId === 'manual' ? v.manualVendorName : masterSuppliers.find(x => x.id.toString() === v.vendorId)?.name;
+                                return <option key={i} value={i} className="text-slate-800">{toTitleCase(name || `Supplier ${i + 1}`)}</option>
+                              })}
+                            </select>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => triggerScan(brand.id, 'camera')}
+                          title="Scan Brand"
+                          className="w-9 h-9 rounded-xl bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition-all active:scale-90 border border-white/20">
+                          <span className="text-sm">📷</span>
+                        </button>
+                        {brandBoxes > 0 && (
+                          <span className="text-xs font-black text-white bg-white/20 px-2.5 py-1 rounded-lg">{brandBoxes} 📦</span>
+                        )}
+                        {brands.length > 1 && (
+                          <button onClick={() => removeBrand(brand.id)}
+                            className="w-8 h-8 rounded-lg bg-white/10 hover:bg-red-500 text-white/80 hover:text-white transition-all flex items-center justify-center text-sm">✕</button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Meta fields */}
+                    <div className="px-4 py-3">
+                      <Sel label="Loading Pattern" req err={attempted && !brand.loadingPattern} value={brand.loadingPattern} onChange={e => updBrand(brand.id, 'loadingPattern', e.target.value)}>
+                        <option value="" disabled>Select Pattern…</option>
+                        {LOADING_PATTERNS.map(p => <option key={p}>{p}</option>)}
+                      </Sel>
+                    </div>
+
+                    {/* Variety qty grid */}
+                    <div className="px-4 pb-4 space-y-1.5">
+                      <Lbl>Quantities (Boxes)</Lbl>
+                      {/* Removal button for varieties (only if they have no qty or user manually wants to clear) */}
+                      {Array.from(new Set([...baseVarieties, ...Object.keys(brand.varieties)])).filter(code => {
+                        const d = brand.varieties[code];
+                        return d && (parseFloat(d.qty) > 0 || d.manual || d.qty === '');
+                      }).map(code => {
+                        const d = brand.varieties[code] || { qty: '', rate: '' };
+                        const hasV = parseFloat(d.qty) > 0;
+                        const isOthers = code === 'Others';
+                        const isStandard = baseVarieties.includes(code);
+                        return (
+                          <div key={code}
+                            className={`flex items-center justify-between px-3 py-2.5 rounded-xl border transition-all relative group
+                            ${hasV ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-100 hover:border-slate-200'}`}>
+                            
+                            {/* Remove grade button */}
+                            {!hasV && (
+                              <button 
+                                onClick={() => {
+                                  const newV = { ...brand.varieties };
+                                  delete newV[code];
+                                  updBrand(brand.id, 'varieties', newV);
+                                }}
+                                className="absolute -left-2 -top-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] shadow-sm opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                                ✕
+                              </button>
+                            )}
+
+                            <div className="flex-1 min-w-0">
+                              <span className={`text-[10px] font-black uppercase tracking-widest block mb-0.5 ${hasV ? 'text-blue-600' : 'text-slate-400'}`}>
+                                {isOthers ? 'Other Grade' : isStandard ? 'Variety / Grade' : 'Custom Grade'}
+                              </span>
+                              {isOthers ? (
+                                <input
+                                  type="text"
+                                  placeholder="Type grade name..."
+                                  value={brand.varieties[code]?.customName || ''}
+                                  onChange={e => updVar(brand.id, code, 'customName', e.target.value)}
+                                  className={`w-full bg-slate-100/50 border-b-2 border-slate-200 px-2 py-1 rounded-t-lg text-sm font-black focus:border-blue-400 focus:ring-0 placeholder:text-slate-400 transition-all ${hasV ? 'text-blue-800' : 'text-slate-600'}`}
+                                />
+                              ) : (
+                                <span className={`text-sm font-black uppercase tracking-tight block truncate ${hasV ? 'text-blue-900' : 'text-slate-700'}`}>{code}</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {isOrder && (
+                                <div className="relative">
+                                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400 text-[11px]">₹</span>
+                                  <input type="number" placeholder="Rate"
+                                    value={d.rate}
+                                    onChange={e => updVar(brand.id, code, 'rate', e.target.value)}
+                                    className="w-16 h-9 pl-5 text-center rounded-lg text-xs font-medium border border-slate-200 bg-white focus:border-orange-400 focus:ring-2 focus:ring-orange-100 transition-all" />
+                                </div>
+                              )}
+                              <input type="number" placeholder="—"
+                                value={d.qty}
+                                onChange={e => updVar(brand.id, code, 'qty', e.target.value)}
+                                className={`w-20 h-9 text-center rounded-xl text-base font-black border-2 transition-all
+                                focus:ring-2 focus:ring-blue-100
+                                ${hasV ? 'bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-200' : 'bg-white text-slate-700 border-slate-200 focus:border-blue-400'}`} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {/* Add Grades Button */}
+                      <div className="pt-1">
+                        <button
+                          onClick={() => setPickerBrand(brand.id)}
+                          className="w-full h-10 rounded-xl border-2 border-dashed border-slate-200 bg-white text-[10px] font-black text-slate-400 uppercase tracking-widest transition-all hover:bg-slate-50 hover:border-blue-300 hover:text-blue-500 flex items-center justify-center gap-2 active:scale-95">
+                          <span className="text-lg">＋</span> Add Grades / Varieties
+                        </button>
+                      </div>
+
+                      {baseVarieties.length === 0 && Object.keys(brand.varieties).length === 0 && <p className="text-slate-400 text-sm text-center py-3">Select a product to see grades</p>}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <GradePicker
+                isOpen={pickerBrand !== null}
+                onClose={() => setPickerBrand(null)}
+                varieties={baseVarieties}
+                selected={brands.find(b => b.id === pickerBrand)?.varieties || {}}
+                onApply={(vars) => updBrand(pickerBrand, 'varieties', vars)}
+              />
+
+              {/* ── PREMIUM OCR REVIEW OVERLAY ── */}
+              {ocrPreview && (
+                <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md pop-in">
+                  <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl overflow-hidden slide-up-modal flex flex-col max-h-[90vh]">
+
+                    {/* Header */}
+                    <div className="p-6 pb-4 border-b border-slate-100 flex items-center justify-between bg-white sticky top-0 z-10">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-indigo-50 flex items-center justify-center text-xl">🔍</div>
+                        <div>
+                          <h2 className="text-lg font-black text-slate-800 tracking-tight">Review Scan Results</h2>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Check AI accuracy before applying</p>
+                        </div>
+                      </div>
+                      <button onClick={() => setOcrPreview(null)} className="w-10 h-10 flex items-center justify-center rounded-2xl bg-slate-50 text-slate-400 hover:bg-slate-100 transition-all">✕</button>
+                    </div>
+
+                    {/* Scrollable Content */}
+                    <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide">
+
+                      {/* Trip Info Grid */}
+                      <div className="grid grid-cols-2 gap-4">
+                        {[
+                          { label: 'Vehicle Number', val: ocrPreview.vehicleNumber, icon: '🚛' },
+                          { label: 'Driver Mobile', val: ocrPreview.driverMobile, icon: '📱' },
+                          { label: 'Dispatch Date', val: fmtDate(ocrPreview.dispatchDate), icon: '📅' },
+                          { label: 'Market/City', val: ocrPreview.destination, icon: '📍' }
+                        ].map((item, id) => (
+                          <div key={id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                              <span>{item.icon}</span> {item.label}
+                            </p>
+                            <p className="text-sm font-black text-slate-800 break-all">{item.val || '—'}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Brand Lists */}
+                      <div>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                          <span className="w-4 h-px bg-slate-200"></span> Detected Load Manifest <span className="w-4 h-px bg-slate-200"></span>
+                        </p>
+                        <div className="space-y-3">
+                          {Array.isArray(ocrPreview.brands) && ocrPreview.brands.map((b, bi) => (
+                            <div key={bi} className="border border-slate-100 rounded-2xl p-4 bg-white shadow-sm">
+                              <div className="flex items-center justify-between mb-3">
+                                <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full uppercase tracking-wider">{b.name || 'Brand'}</span>
+                                <span className="flex items-center gap-1 text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                                  <span className="text-xs">✓</span> Scanned
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {b.varieties && Object.entries(b.varieties).map(([k, v]) => (
+                                  v !== null && (
+                                    <div key={k} className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 px-2.5 py-1.5 rounded-xl">
+                                      <span className="text-[10px] font-black text-slate-500 uppercase">{k}</span>
+                                      <span className="text-xs font-black text-slate-800">{v}</span>
+                                    </div>
+                                  )
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="p-6 pt-4 border-t border-slate-100 bg-slate-50/50 flex gap-3">
+                      <button onClick={() => setOcrPreview(null)}
+                        className="flex-1 h-14 rounded-2xl bg-white border border-slate-200 text-slate-600 text-sm font-black uppercase tracking-widest active:scale-95 transition-all">
+                        Cancel
+                      </button>
+                      <button onClick={confirmOcrPreview}
+                        className="flex-[2] h-14 rounded-2xl bg-indigo-600 text-white text-sm font-black uppercase tracking-widest active:scale-95 transition-all shadow-xl shadow-indigo-200 flex items-center justify-center gap-2">
+                        <span>✨</span> Confirm & Apply
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Add brand dashed CTA */}
+              <button onClick={addBrand}
+                className="w-full h-12 rounded-2xl border-2 border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50 text-slate-400 hover:text-blue-500 text-sm font-bold transition-all flex items-center justify-center gap-2 active:scale-98">
+                ＋ Add Brand #{brands.length + 1}
+              </button>
+
+              {/* ── SUMMARY ── */}
+              {totals.boxes > 0 && (
+                <Card color="green" icon="🧾" title="Summary Receipt">
+                  <div className="space-y-1 text-sm border-b border-green-100 pb-3">
+                    {[['Date', fmtDateLong(header.dispatchDate)], ['Supplier', vendorName || '--'], ['Vehicle', header.vehicleNumber || '--'], ['Product', `${PRODUCT_EMOJI[product]} ${product}`]].map(([k, v]) => (
+                      <div key={k} className="flex justify-between">
+                        <span className="text-slate-500">{k}</span>
+                        <span className="font-bold text-slate-800 text-right max-w-[200px] truncate">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="space-y-2">
+                    {totals.breakdown.map((group, i) => (
+                      <div key={i} className="mb-4 last:mb-0">
+                        <div className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest pl-1 mb-2">{group.vendorName}</div>
+                        <div className="space-y-2">
+                          {group.brands.map((b, bi) => (
+                            <div key={bi} className="flex justify-between items-center py-2 px-1">
+                              <div className="flex flex-col gap-0.5 text-left">
+                                <span className="text-base font-black text-slate-800 uppercase leading-none">{b.name}</span>
+                                {b.loadingPattern && (
+                                  <span className="text-[10px] font-bold text-slate-400 capitalize mt-1.5 block">{b.loadingPattern}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xl font-black text-slate-900 leading-none">{b.boxes} <span className="text-[11px] font-bold text-slate-400 inline-block align-middle transform -translate-y-[1px]">boxes</span></span>
+                                {isOrder && <span className="text-xs font-mono text-orange-600 bg-orange-50 px-2 py-0.5 rounded-lg">₹{b.value.toLocaleString()}</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex justify-between items-center pt-2 border-t border-green-200">
+                      <span className="text-base font-black text-slate-800">Total Boxes</span>
+                      <span className="text-3xl font-black text-blue-600">{totals.boxes}</span>
+                    </div>
+                    {isOrder && totals.total > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-bold text-slate-600">Grand Total</span>
+                        <span className="text-lg font-black text-orange-600">₹{totals.total.toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              )}
+
+              {submitStatus.type !== 'idle' && (
+                <div className={`px-5 py-4 rounded-2xl border text-sm font-bold flex items-center gap-3 slide-down shadow-sm mb-4
+                ${submitStatus.type === 'loading' ? 'bg-white border-blue-100 text-blue-600 shimmer'
+                    : submitStatus.type === 'success' ? 'bg-green-50/80 backdrop-blur-sm border-green-200 text-green-700'
+                      : 'bg-red-50/80 backdrop-blur-sm border-red-200 text-red-600'}`}>
+                  {submitStatus.type === 'loading' ? (
+                    <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-blue-50 border border-blue-100">
+                      <span className="spin text-lg">✨</span>
+                    </div>
+                  ) : (
+                    <div className={`flex items-center justify-center w-8 h-8 rounded-xl ${submitStatus.type === 'success' ? 'bg-green-100' : 'bg-red-100'}`}>
+                      <span>{submitStatus.type === 'success' ? '✅' : '⚠️'}</span>
+                    </div>
+                  )}
+                  <div className="flex-1 font-extrabold tracking-tight italic">
+                    {submitStatus.msg}
+                  </div>
+                  {submitStatus.type !== 'loading' && (
+                    <button onClick={() => setSubmitStatus({ type: 'idle', msg: '' })} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-black/5 transition-colors">✕</button>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <button onClick={downloadPDF} disabled={!pdfReady || totals.boxes === 0}
+                  className={`h-14 rounded-2xl font-bold text-sm border transition-all flex flex-col items-center justify-center gap-0.5
+                  ${pdfReady && totals.boxes > 0 ? 'bg-white border-slate-300 text-slate-700 hover:border-blue-300 hover:shadow-md active:scale-95' : 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'}`}>
+                  <span className="text-lg">📄</span>
+                  <span className="text-xs">Download PDF</span>
+                </button>
+                <button onClick={submit} disabled={submitStatus.type === 'loading'}
+                  className={`h-14 rounded-2xl font-bold text-sm text-white shadow-lg shadow-blue-200 transition-all flex flex-col items-center justify-center gap-0.5
+                  ${submitStatus.type === 'loading' ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 active:scale-95'}`}>
+                  {submitStatus.type === 'loading'
+                    ? <><span className="spin text-xl">⟳</span><span className="text-xs">Saving…</span></>
+                    : <><span className="text-lg">✅</span><span className="text-xs">Submit Trip</span></>}
+                </button>
+              </div>
+
+
+
+            </div>
+          </div>
+
+
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+
+</html>

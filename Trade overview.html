@@ -134,6 +134,29 @@
     const SUPABASE_KEY = 'sb_publishable_ol8Jx4QsNZ22v-C1zSBoNQ_AHLFAAFT';
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     const MAX_TRUCK_CAPACITY = 1200;
+    // --- STATUS GROUPS (single source of truth) ---
+    const SALES_STATUSES   = ['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'];
+    const ARRIVED_STATUSES = ['REACHED_MARKET', ...SALES_STATUSES];
+
+    // --- LOOKUP DATA (top-level constants, not inside render) ---
+    const DEST_OPTIONS = ['Bengaluru', 'Chennai', 'Hyderabad', 'Madurai', 'Panruti', 'Cochin', 'Coimbatore', 'Trichy'];
+    const CUSTOMER_OPTIONS = [
+      'SR Fruits', 'MTR', 'Selvam RD', 'Sri Fruits', 'AVN', 'Chennai Fruits',
+      'Thiruchendur murugan', 'MNR Mayaan', 'Annadatta', 'Vamshi fruits', 'Sai Karthik',
+      'Santosh Fruit', 'KRK', 'CFC', 'Gangothri', 'VR Traders', 'Akshay Ankush Shinde',
+      'Anvesh Trading Co.', 'Jay Ambey Fruits', 'Shree Om Fruits', 'Rajveer Singh',
+      'Rajdhani Fruit Trader', 'Fresh Frutz', 'Waseem Ahmed Co.'
+    ];
+
+
+    // Safe JSON parse for the notes envelope stored in Supabase.
+    // All structured data lives inside this object under named keys (_customerAssignments, _note, etc.)
+    const parseNotes = (raw) => { try { return JSON.parse(raw || '{}'); } catch { return {}; } };
+
+    const toTitleCase = (str) => {
+      if (!str) return '';
+      return str.toLowerCase().split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+    };
 
     // ─── HELPERS ─────────────────────────────────────────────────
     const fmtDate = (d) => {
@@ -143,15 +166,6 @@
         if (isNaN(dt)) return d;
         return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', weekday: 'short' }).format(dt);
       } catch { return d; }
-    };
-
-    const weatherFor = (city = '') => {
-      const c = city.toLowerCase();
-      if (c.includes('bangalore') || c.includes('bengaluru')) return { temp: '24°C', cond: 'Cloudy', icon: '☁️', alert: '' };
-      if (c.includes('mumbai')) return { temp: '29°C', cond: 'Rain', icon: '🌧️', alert: 'Rain Risk' };
-      if (c.includes('delhi') || c.includes('nokhra')) return { temp: '34°C', cond: 'Sunny', icon: '☀️', alert: 'High Heat' };
-      if (c.includes('chennai')) return { temp: '30°C', cond: 'Humid', icon: '💨', alert: '' };
-      return { temp: '27°C', cond: 'Clear', icon: '🌤️', alert: '' };
     };
 
     const ZONE_STYLES = [
@@ -257,6 +271,7 @@
             commission: dMap.commission || trade.commission_amount || 0,
             otherExpenses: dMap.other || trade.other_expenses || 0,
             otherNote: dMap.note || trade.other_expenses_note || '',
+            notes: trade.notes || '',
           },
           marks: Array.from(marksMap.values()),
           gradeColumns: Array.from(varietySet).sort((a, b) => {
@@ -448,8 +463,26 @@
     };
     const toDbStatus = s => STATUS_TO_DB[s] || s;
 
-    function DetailView({ trip, allTrips, onBack, onSwitch, onUpdate }) {
+    function DetailView({ trip, allTrips, masterSuppliers, masterCustomers, onBack, onSwitch, onUpdate, fetchMasterData }) {
       const [videos, setVideos] = useState([]);
+
+      const addMasterSupplier = async (name) => {
+        const titleName = toTitleCase(name.trim());
+        if (!titleName) return null;
+        const { data, error } = await supabase.from('suppliers').insert([{ name: titleName }]).select().single();
+        if (error) { console.error("Error adding supplier:", error); return null; }
+        await fetchMasterData();
+        return data;
+      };
+
+      const addMasterCustomer = async (name, market = 'Other') => {
+        const titleName = toTitleCase(name.trim());
+        if (!titleName) return null;
+        const { data, error } = await supabase.from('customers').insert([{ name: titleName, destination_market: toTitleCase(market) }]).select().single();
+        if (error) { console.error("Error adding customer:", error); return null; }
+        await fetchMasterData();
+        return data;
+      };
       const fileRef = useRef(null);
       const [editing, setEditing] = useState(false);
       const [saving, setSaving] = useState(false);
@@ -465,13 +498,41 @@
          initialAssignments = _initialDtName.map(n => ({ id: Math.random().toString(), customerName: n, allocations: [] }));
       }
       const [editData, setEditData] = useState({
-        status: trip.details.status, destination: trip.details.destination,
+        status: trip.details.status, 
+        destination: trip.details.destination,
+        origin: trip.details.origin,
+        supplier: trip.details.supplier,
         eta: trip.details.eta,
         customerAssignments: initialAssignments,
         customDtInput: '',
-        dtFocus: false
+        dtFocus: false,
+        destFocus: false,
+        originFocus: false,
+        supplierFocus: false
       });
       const [tripNotes, setTripNotes] = useState(trip.details.notes || '');
+
+      React.useEffect(() => {
+        const handler = (e) => {
+          setEditData(prev => {
+            const upd = { ...prev };
+            let changed = false;
+            Object.keys(upd).forEach(k => {
+               if (k.startsWith('markaFocus_') && upd[k] === true) {
+                  const cIdx = k.split('_')[1];
+                  const container = document.getElementById(`marka-container-${cIdx}`);
+                  if (container && !container.contains(e.target)) {
+                     upd[k] = false;
+                     changed = true;
+                  }
+               }
+            });
+            return changed ? upd : prev;
+          });
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+      }, []);
 
       // ─── Customer Assignment State ─────────────────────────────
       const [customerAssignments, setCustomerAssignments] = useState(() => {
@@ -484,6 +545,10 @@
 
       // Item data state: { manifest_id: { received, rate } }
       const [itemData, setItemData] = useState({});
+      // Per-DT Sales Data: { customerId: { manifest_item_id: { received, rate } } }
+      const [dtSalesData, setDtSalesData] = useState({});
+      const [selectedDtId, setSelectedDtId] = useState(null);
+      
       const [expenses, setExpenses] = useState({
         freight: trip.details.freight,
         coolie: trip.details.coolie,
@@ -495,7 +560,20 @@
       // Initialize/Sync local state when switching trips
       useEffect(() => {
         setLocalDetails(trip.details);
-        setEditData({ status: trip.details.status, destination: trip.details.destination, eta: trip.details.eta, dtName: trip.details.dtName, customerAssignments: Array.isArray((() => {try{return JSON.parse(trip.details.notes||'{}')}catch{return {}}})()._customerAssignments) ? JSON.parse(trip.details.notes||'{}')._customerAssignments : [] });
+        setEditData({ 
+          status: trip.details.status, 
+          destination: trip.details.destination, 
+          origin: trip.details.origin,
+          supplier: trip.details.supplier,
+          eta: trip.details.eta, 
+          dtName: trip.details.dtName, 
+          customerAssignments: Array.isArray((() => {try{return JSON.parse(trip.details.notes||'{}')}catch{return {}}})()._customerAssignments) ? JSON.parse(trip.details.notes||'{}')._customerAssignments : [],
+          customDtInput: '',
+          dtFocus: false,
+          destFocus: false,
+          originFocus: false,
+          supplierFocus: false
+        });
         setExpenses({
           freight: trip.details.freight,
           coolie: trip.details.coolie,
@@ -516,11 +594,16 @@
         setActiveTab(['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(trip.details.status) ? 'market' : 'dashboard');
 
         // Re-load customer assignments for the new trip
-        try { const p = JSON.parse(trip.details.notes || '{}'); setCustomerAssignments(Array.isArray(p._customerAssignments) ? p._customerAssignments : []); }
-        catch { setCustomerAssignments([]); }
+        try { 
+          const p = parseNotes(trip.details.notes); 
+          const assignments = Array.isArray(p._customerAssignments) ? p._customerAssignments : [];
+          setCustomerAssignments(assignments);
+          setDtSalesData(p._dtSalesData || {});
+          if (assignments.length > 0) setSelectedDtId(assignments[0].id);
+          else setSelectedDtId(null);
+        }
+        catch { setCustomerAssignments([]); setDtSalesData({}); setSelectedDtId(null); }
       }, [trip.details.tripId]);
-
-      const w = weatherFor(localDetails.destination);
 
       const totals = useMemo(() => {
         const g = {}; let grand = 0; let recvGrand = 0; let gross = 0;
@@ -553,14 +636,34 @@
       const saveMarketData = async () => {
         setSaving(true); setSaveMsg('Saving records...'); setShowStatusPrompt(false);
         try {
-          // 1. Update manifest items (Source of truth for current state)
-          const updates = Object.entries(itemData).map(([id, data]) => ({
-            id: id,
-            received_boxes: data.received === '' ? null : parseInt(data.received),
-            sales_rate: data.rate === '' ? null : parseFloat(data.rate)
-          }));
+          // 1. Update manifest items (Source of truth for current state - sum of all DTs)
+          const manifestUpdates = [];
+          trip.marks.forEach(m => {
+            Object.entries(m.grades).forEach(([gradeName, v]) => {
+              let rTotal = 0;
+              let rtSum = 0;
+              let dtCount = 0;
+              
+              Object.values(dtSalesData).forEach(custData => {
+                 const d = custData[v.id];
+                 if (d) {
+                    rTotal += (parseFloat(d.received) || 0);
+                    rtSum += (parseFloat(d.rate) || 0);
+                    dtCount++;
+                 }
+              });
 
-          for (const up of updates) {
+              if (dtCount > 0 || itemData[v.id]) {
+                 manifestUpdates.push({
+                   id: v.id,
+                   received_boxes: dtCount > 0 ? rTotal : (parseInt(itemData[v.id]?.received) || null),
+                   sales_rate: dtCount > 0 ? (rtSum / dtCount) : (parseFloat(itemData[v.id]?.rate) || null) // Average rate for overview
+                 });
+              }
+            });
+          });
+
+          for (const up of manifestUpdates) {
             const { error } = await supabase.from('trade_manifest').update({
               received_boxes: up.received_boxes,
               sales_rate: up.sales_rate
@@ -568,7 +671,7 @@
             if (error) throw error;
           }
 
-          // 2. Update destination expenses in dedicated table (Roadmap Phase 2)
+          // 2. Update destination expenses (Roadmap Phase 2)
           const destExps = [
             { type: 'Freight', amount: parseFloat(expenses.freight) || 0 },
             { type: 'Coolie', amount: parseFloat(expenses.coolie) || 0 },
@@ -590,43 +693,57 @@
             if (eExp) throw eExp;
           }
 
-          // 3. Record Sales Transactions (Roadmap Phase 2)
-          const salesRecords = updates.filter(up => (up.received_boxes || 0) > 0 && (up.sales_rate || 0) > 0).map(up => {
-            let variety = 'Unknown';
-            // Find variety name from original manifest
-            trip.marks.forEach(m => {
-              Object.entries(m.grades).forEach(([k, v]) => { if (v.id === up.id) variety = k; });
-            });
+          // 3. Record Granular DT Sales Transactions (Roadmap Phase 4)
+          const dtSalesRecords = [];
+          Object.entries(dtSalesData).forEach(([custId, items]) => {
+             // Find customer record from masterCustomers
+             const customer = masterCustomers.find(c => c.id.toString() === custId || c.name === (customerAssignments.find(ca => ca.id === custId)?.customerName));
+             
+             Object.entries(items).forEach(([vId, data]) => {
+                const boxes = parseFloat(data.received) || 0;
+                const rate = parseFloat(data.rate) || 0;
+                if (boxes > 0 && rate > 0) {
+                   // Find brand/variety info
+                   let brand = 'Unknown', variety = 'Unknown';
+                   trip.marks.forEach(m => {
+                      Object.entries(m.grades).forEach(([gName, v]) => {
+                         if (v.id === vId) { brand = cleanBrandName(m.name); variety = gName; }
+                      });
+                   });
 
-            return {
-              trip_id: localDetails.tripId,
-              variety_grade: variety,
-              quantity: up.received_boxes,
-              rate: up.sales_rate
-              // total_amount is a GENERATED column in Supabase (quantity × rate), DB computes it
-            };
+                   dtSalesRecords.push({
+                      trip_id: localDetails.tripId,
+                      customer_id: customer?.id || null, // Best effort
+                      brand_name: brand,
+                      variety_grade: variety,
+                      boxes_sold: boxes,
+                      sale_rate_per_box: rate,
+                      total_sale_value: boxes * rate
+                   });
+                }
+             });
           });
 
-          if (salesRecords.length > 0) {
-            await supabase.from('sales_transactions').delete().eq('trip_id', localDetails.tripId);
-            const { error: eSales } = await supabase.from('sales_transactions').insert(salesRecords);
-            if (eSales) throw eSales;
+          if (dtSalesRecords.length > 0) {
+             await supabase.from('dt_sales_transactions').delete().eq('trip_id', localDetails.tripId);
+             const { error: eDtSales } = await supabase.from('dt_sales_transactions').insert(dtSalesRecords);
+             if (eDtSales) throw eDtSales;
           }
 
-          // Save trip notes + customer assignments merged
-          const notesObj = (() => { try { return JSON.parse(trip.details.notes || '{}'); } catch { return {}; } })();
-          notesObj._customerAssignments = brandAssignments;
+          // Save trip notes + customer assignments + per-dt sales (nested for persistence)
+          const notesObj = parseNotes(trip.details.notes);
+          notesObj._customerAssignments = customerAssignments;
+          notesObj._dtSalesData = dtSalesData; // Persist for offline/session recovery
           const mergedNotes = JSON.stringify(notesObj);
-          if (mergedNotes !== (trip.details.notes || '')) {
-            await supabase.from('trades').update({ notes: mergedNotes }).eq('trip_id', localDetails.tripId);
-          }
+          
+          await supabase.from('trades').update({ notes: mergedNotes }).eq('trip_id', localDetails.tripId);
 
           // Check if we should prompt for status bump
-          const hasRates = Object.values(itemData).some(d => parseFloat(d.rate) > 0);
+          const hasRates = Object.values(dtSalesData).some(dMap => Object.values(dMap).some(d => parseFloat(d.rate) > 0));
           const notYetCompleted = !['SALES_COMPLETED', 'CLOSED'].includes(localDetails.status);
           if (hasRates && notYetCompleted) setShowStatusPrompt(true);
 
-          setSaveMsg('✓ Market data & transactions saved');
+          setSaveMsg('✓ Market data saved successfully');
           onUpdate(localDetails.tripId, {
             ...localDetails,
             freight: expenses.freight,
@@ -637,14 +754,15 @@
             notes: mergedNotes
           });
           setTimeout(() => setSaveMsg(''), 4000);
-        } catch (e) {
-          setSaveMsg('❌ ' + (e.message || 'Save failed'));
+        } catch (err) {
+          console.error("Save error:", err);
+          setSaveMsg('❌ Error: ' + err.message);
         } finally { setSaving(false); }
       };
 
       // Persist customer assignments in Supabase notes field
       const saveCustomerAssignments = async (newAssignments) => {
-        setBrandAssignments(newAssignments);
+        setCustomerAssignments(newAssignments);
         try {
           const notesObj = (() => { try { return JSON.parse(localDetails.notes || '{}'); } catch { return {}; } })();
           notesObj._customerAssignments = newAssignments;
@@ -656,21 +774,37 @@
       };
 
       const [custPdfData, setCustPdfData] = useState(null);
-      const captureHiddenCustomerPdf = async (customerObj) => {
-        setCustPdfExporting(customerObj.customerName);
-        setCustPdfData(customerObj);
+      const loadCustomerPreview = async (cust) => {
+        if (exportPreview && exportPreview.previews && exportPreview.previews[cust.id]) {
+          setExportPreview(p => ({ ...p, activeTab: cust.id }));
+          return;
+        }
+        
+        setCustPdfExporting(cust.id);
+        setCustPdfData(cust);
         await new Promise(r => setTimeout(r, 100)); // wait render
+        
         const el = document.getElementById('hidden-customer-export-container');
-        if (!el) return;
+        if (!el) { setCustPdfExporting(false); setCustPdfData(null); return; }
+        
         try {
           const canvas = await window.html2canvas(el, { scale: 2, backgroundColor: '#F8FAFC', width: 1000, windowWidth: 1000, onclone: doc => doc.body.classList.add('export-mode') });
-          const o = canvas.width > canvas.height ? 'l' : 'p';
-          const pdf = new window.jspdf.jsPDF(o, 'mm', 'a4');
-          pdf.addImage(canvas.toDataURL('image/jpeg', 0.9), 'JPEG', 0, 10, pdf.internal.pageSize.getWidth(), (canvas.height * pdf.internal.pageSize.getWidth()) / canvas.width);
-          pdf.save(`Manifest_${localDetails.tripId}_${(customerObj.customerName || 'Customer').replace(/\s+/g,'_')}.pdf`);
-          setSaveMsg(`✓ Downloaded PDF for ${customerObj.customerName || 'Customer'}`);
-          setTimeout(() => setSaveMsg(''), 4000);
-        } catch (e) { console.error(e); } finally { setCustPdfExporting(false); setCustPdfData(null); }
+          const imgData = canvas.toDataURL('image/jpeg', 0.9);
+          
+          setExportPreview(p => ({
+            ...p,
+            activeTab: cust.id,
+            previews: {
+              ...p.previews,
+              [cust.id]: { imgData, canvasWidth: canvas.width, canvasHeight: canvas.height }
+            }
+          }));
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setCustPdfExporting(false);
+          setCustPdfData(null);
+        }
       };
 
       const saveEdits = async () => {
@@ -693,12 +827,17 @@
           let finalCustomerAssignments = editData.customerAssignments || [];
           let isMultiple = finalCustomerAssignments.length > 1;
           
-          let finalDtName = finalCustomerAssignments.map(c => c.customerName).filter(Boolean).join(', ');
+          // Apply Title Case to all fields as per user requirement
+          const cleanDest = toTitleCase(editData.destination || '');
+          const cleanOrigin = toTitleCase(editData.origin || '');
+          const cleanSupplier = toTitleCase(editData.supplier || '');
+
+          let finalDtName = finalCustomerAssignments.map(c => toTitleCase(c.customerName)).filter(Boolean).join(', ');
 
           if (!isMultiple) {
             finalCustomerAssignments = [{
               id: (finalCustomerAssignments && finalCustomerAssignments.length === 1) ? finalCustomerAssignments[0].id : Date.now().toString(),
-              customerName: finalDtName || 'Unknown',
+              customerName: toTitleCase(finalDtName || 'Unknown'),
               allocations: trip.marks.map(m => ({
                 id: m.name,
                 brand: m.name,
@@ -713,7 +852,9 @@
 
           const { error } = await supabase.from('trades').update({
             status: toDbStatus(editData.status),
-            destination_market: editData.destination,
+            destination_market: cleanDest,
+            source_location: cleanOrigin,
+            vendor_name: cleanSupplier,
             arrival_date: editData.eta || null,
             dt_name: finalDtName,
             notes: mergedNotes
@@ -721,7 +862,17 @@
           
           setCustomerAssignments(finalCustomerAssignments);
           if (error) throw error;
-          const updated = { ...localDetails, status: editData.status, destination: editData.destination, eta: editData.eta, dtName: finalDtName, notes: mergedNotes };
+          
+          const updated = { 
+            ...localDetails, 
+            status: editData.status, 
+            destination: cleanDest, 
+            origin: cleanOrigin, 
+            supplier: cleanSupplier,
+            eta: editData.eta, 
+            dtName: finalDtName, 
+            notes: mergedNotes 
+          };
           setLocalDetails(updated);
           onUpdate(localDetails.tripId, updated);
           setEditing(false);
@@ -732,11 +883,36 @@
         } finally { setSaving(false); }
       };
 
-      const addVideo = (e) => {
+      // ─── SUPABASE STORAGE MEDIA ─────────────────────────────────
+      // Requires a public bucket named 'trip-media' in your Supabase project.
+      // Enable via: Storage → New bucket → trip-media → Public
+      const MEDIA_BUCKET = 'trip-media';
+
+      const loadMedia = useCallback(async (tripId) => {
+        const { data, error } = await supabase.storage.from(MEDIA_BUCKET).list(tripId, { limit: 50 });
+        if (error || !data) return;
+        const urls = data.map(f => ({
+          id: f.name,
+          title: f.name.replace(/^\d+_/, ''),
+          url: supabase.storage.from(MEDIA_BUCKET).getPublicUrl(`${tripId}/${f.name}`).data.publicUrl
+        }));
+        setVideos(urls);
+      }, []);
+
+      useEffect(() => { loadMedia(localDetails.tripId); }, [localDetails.tripId, loadMedia]);
+
+      const addVideo = async (e) => {
         const f = e.target.files?.[0]; if (!f) return;
-        const url = URL.createObjectURL(f);
-        setVideos(v => [...v, { id: Date.now(), title: f.name, url }]);
         e.target.value = '';
+        const path = `${localDetails.tripId}/${Date.now()}_${f.name}`;
+        const { error } = await supabase.storage.from(MEDIA_BUCKET).upload(path, f, { upsert: false });
+        if (!error) await loadMedia(localDetails.tripId);
+        else console.error('Media upload error:', error.message);
+      };
+
+      const deleteMedia = async (item) => {
+        await supabase.storage.from(MEDIA_BUCKET).remove([`${localDetails.tripId}/${item.id}`]);
+        setVideos(v => v.filter(x => x.id !== item.id));
       };
 
       const cleanBrandName = name => name ? name.split(' - ').pop() : '';
@@ -781,7 +957,12 @@
           });
 
           const imgData = canvas.toDataURL('image/jpeg', 0.9);
-          setExportPreview({ imgData, canvasWidth: canvas.width, canvasHeight: canvas.height, linkParams });
+          setExportPreview({
+            activeTab: 'overall',
+            previews: {
+              overall: { imgData, canvasWidth: canvas.width, canvasHeight: canvas.height, linkParams }
+            }
+          });
         } catch (e) { console.error('Export Error:', e); } finally {
           setExportingType(false);
         }
@@ -789,24 +970,45 @@
 
       const handleDownloadExport = (type) => {
         if (!exportPreview) return;
+        const active = exportPreview.previews[exportPreview.activeTab];
+        if (!active) return;
+
+        let filename = `Manifest_${localDetails.tripId}`;
+        if (exportPreview.activeTab !== 'overall') {
+           const cust = customerAssignments.find(c => c.id === exportPreview.activeTab);
+           if (cust) filename += `_${(cust.customerName || 'Customer').replace(/\s+/g,'_')}`;
+        }
+
         if (type === 'JPG') {
           const link = document.createElement('a');
-          link.download = `Manifest_${localDetails.tripId}.jpg`;
-          link.href = exportPreview.imgData;
+          link.download = `${filename}.jpg`;
+          link.href = active.imgData;
           link.click();
         } else {
-          const orientation = exportPreview.canvasWidth > exportPreview.canvasHeight ? 'l' : 'p';
+          const orientation = active.canvasWidth > active.canvasHeight ? 'l' : 'p';
           const pdf = new window.jspdf.jsPDF(orientation, 'mm', 'a4');
-          const pdfWidth = pdf.internal.pageSize.getWidth();
-          const pdfHeight = (exportPreview.canvasHeight * pdfWidth) / exportPreview.canvasWidth;
-          pdf.addImage(exportPreview.imgData, 'JPEG', 0, 10, pdfWidth, pdfHeight);
-          if (exportPreview.linkParams) {
-            const { relX, relY, relW, relH, url } = exportPreview.linkParams;
-            pdf.link(relX * pdfWidth, 10 + (relY * pdfHeight), relW * pdfWidth, relH * pdfHeight, { url });
+          
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+          const margin = 10;
+          
+          let imgWidth = pageWidth;
+          let imgHeight = (active.canvasHeight * imgWidth) / active.canvasWidth;
+          
+          if (imgHeight > pageHeight - margin * 2) {
+            imgHeight = pageHeight - margin * 2;
+            imgWidth = (active.canvasWidth * imgHeight) / active.canvasHeight;
           }
-          pdf.save(`Manifest_${localDetails.tripId}.pdf`);
+          
+          const xOffset = (pageWidth - imgWidth) / 2;
+          
+          pdf.addImage(active.imgData, 'JPEG', xOffset, margin, imgWidth, imgHeight);
+          if (active.linkParams && exportPreview.activeTab === 'overall') {
+            const { relX, relY, relW, relH, url } = active.linkParams;
+            pdf.link(xOffset + (relX * imgWidth), margin + (relY * imgHeight), relW * imgWidth, relH * imgHeight, { url });
+          }
+          pdf.save(`${filename}.pdf`);
         }
-        setExportPreview(null);
       };
 
       return (
@@ -861,6 +1063,7 @@
                 <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-4 fade-in">
                   <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest">Edit Trip Details</p>
                   <div className="grid grid-cols-2 gap-3">
+                    {/* 1. STATUS */}
                     <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Status</label>
                       <select value={editData.status} onChange={e => setEdit('status', e.target.value)}
@@ -868,44 +1071,109 @@
                         {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                     </div>
+
+                    {/* 2. SUPPLIER (from master data) */}
+                    <div className="relative">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Supplier</label>
+                      <div className="relative" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setEdit('supplierFocus', false); }}>
+                        <input type="text"
+                          value={editData.supplier || ''}
+                          onChange={e => setEdit('supplier', e.target.value)}
+                          onFocus={() => { setEdit('supplierFocus', true); }}
+                          placeholder="e.g. Manas Enterprise"
+                          className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                        {editData.supplierFocus && (
+                          <div className="absolute top-11 left-0 w-full bg-white border border-slate-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto pop-in">
+                            {masterSuppliers.filter(s => s.name.toLowerCase().includes((editData.supplier || '').toLowerCase())).map(s => (
+                              <button key={s.id} type="button"
+                                onClick={() => { setEdit('supplier', s.name); setEdit('supplierFocus', false); }}
+                                className="w-full text-left px-3 py-2 text-sm font-medium text-slate-700 hover:bg-amber-50 cursor-pointer border-b border-slate-50 last:border-0">
+                                {s.name}
+                              </button>
+                            ))}
+                            {editData.supplier?.trim() && !masterSuppliers.some(s => s.name.toLowerCase() === editData.supplier.toLowerCase()) && (
+                              <button type="button"
+                                onClick={async () => {
+                                  const newS = await addMasterSupplier(editData.supplier);
+                                  if (newS) { setEdit('supplier', newS.name); setEdit('supplierFocus', false); }
+                                }}
+                                className="w-full text-left px-3 py-2 text-xs text-emerald-600 font-bold bg-emerald-50 hover:bg-emerald-100 border-t border-slate-100">
+                                + Add "{toTitleCase(editData.supplier)}" to Suppliers
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 3. ORIGIN (from all existing origins) */}
+                    <div className="relative">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Origin (Source)</label>
+                      <div className="relative" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setEdit('originFocus', false); }}>
+                        <input type="text"
+                          value={editData.origin || ''}
+                          onChange={e => setEdit('origin', e.target.value)}
+                          onFocus={() => { setEdit('originFocus', true); }}
+                          placeholder="e.g. Bangalore"
+                          className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                        {editData.originFocus && (() => {
+                          const origins = Array.from(new Set(allTrips.map(t => t.details.origin).filter(o => o && o !== '--'))).sort();
+                          return (
+                            <div className="absolute top-11 left-0 w-full bg-white border border-slate-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto pop-in">
+                              {origins.filter(o => o.toLowerCase().includes((editData.origin || '').toLowerCase())).map(o => (
+                                <button key={o} type="button"
+                                  onClick={() => { setEdit('origin', o); setEdit('originFocus', false); }}
+                                  className="w-full text-left px-3 py-2 text-sm font-medium text-slate-700 hover:bg-amber-50 cursor-pointer border-b border-slate-50 last:border-0">
+                                  {o}
+                                </button>
+                              ))}
+                              {editData.origin?.trim() && !origins.includes(toTitleCase(editData.origin)) && (
+                                <div className="px-3 py-2 text-xs text-slate-400 italic bg-slate-50 border-t border-slate-100">
+                                  New origin: <strong>{toTitleCase(editData.origin)}</strong>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+
+                    {/* 4. DESTINATION (from master data + existing) */}
                     <div className="relative">
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
                         Destination Market {['REACHED_MARKET', 'SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
                       </label>
-                      {/* Custom dropdown */}
-                      {(() => {
-                        const DEST_OPTIONS = ['Bengaluru', 'Chennai', 'Hyderabad', 'Madurai', 'Panruti', 'Cochin', 'Coimbatore', 'Trichy'];
-                        return (
-                          <div className="relative" onBlur={e => {
-                            if (!e.currentTarget.contains(e.relatedTarget)) setEdit('destFocus', false);
-                          }}>
-                            <input type="text"
-                              value={editData.destination || ''}
-                              onChange={e => setEdit('destination', e.target.value)}
-                              onFocus={() => { setEdit('destFocus', true); }}
-                              placeholder="e.g. Chennai"
-                              className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
-                            {editData.destFocus && (
-                              <div className="absolute top-11 left-0 w-full bg-white border border-slate-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto pop-in">
-                                {DEST_OPTIONS.map(d => (
-                                  <button key={d} type="button"
-                                    onClick={() => { setEdit('destination', d); setEdit('destFocus', false); }}
-                                    className="w-full text-left px-3 py-2 text-sm font-medium text-slate-700 hover:bg-amber-50 cursor-pointer border-b border-slate-50 last:border-0"
-                                  >
-                                    {d}
-                                  </button>
-                                ))}
-                                {editData.destination && !DEST_OPTIONS.includes(editData.destination) && (
-                                  <div className="px-3 py-2 text-xs text-slate-400 italic bg-slate-50 border-t border-slate-100">
-                                    Custom market: <strong>{editData.destination}</strong> (Hit save)
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
+                      <div className="relative" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setEdit('destFocus', false); }}>
+                        <input type="text"
+                          value={editData.destination || ''}
+                          onChange={e => setEdit('destination', e.target.value)}
+                          onFocus={() => { setEdit('destFocus', true); }}
+                          placeholder="e.g. Chennai"
+                          className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
+                        {editData.destFocus && (() => {
+                          const markets = Array.from(new Set([...masterCustomers.map(c => c.destination_market), ...allTrips.map(t => t.details.destination)])).filter(Boolean).sort();
+                          return (
+                            <div className="absolute top-11 left-0 w-full bg-white border border-slate-200 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto pop-in">
+                              {markets.filter(m => m.toLowerCase().includes((editData.destination || '').toLowerCase())).map(m => (
+                                <button key={m} type="button"
+                                  onClick={() => { setEdit('destination', m); setEdit('destFocus', false); }}
+                                  className="w-full text-left px-3 py-2 text-sm font-medium text-slate-700 hover:bg-amber-50 cursor-pointer border-b border-slate-50 last:border-0"
+                                >
+                                  {m}
+                                </button>
+                              ))}
+                              {editData.destination?.trim() && !markets.includes(toTitleCase(editData.destination)) && (
+                                <div className="px-3 py-2 text-xs text-slate-400 italic bg-slate-50 border-t border-slate-100">
+                                  New market: <strong>{toTitleCase(editData.destination)}</strong>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
                     </div>
+
+                    {/* 5. ETA */}
                     <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
                         ETA (Arrival Date) {['REACHED_MARKET', 'SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
@@ -913,13 +1181,13 @@
                       <input type="date" value={editData.eta} onChange={e => setEdit('eta', e.target.value)}
                         className="w-full h-10 px-3 rounded-lg border border-slate-200 text-sm font-semibold bg-white focus:border-amber-400 focus:outline-none" />
                     </div>
+
+                    {/* 6. DT NAME (Multi-select from master data) */}
                     <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">
                         DT Name {['SALES_STARTED', 'SALES_COMPLETED', 'CLOSED'].includes(editData.status) && <span className="text-red-500">*</span>}
                       </label>
-                      <div className="relative z-40" onBlur={e => {
-                        if (!e.currentTarget.contains(e.relatedTarget)) setEdit('dtFocus', false);
-                      }}>
+                      <div className="relative z-40" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setEdit('dtFocus', false); }}>
                         <div className="min-h-10 p-1.5 rounded-lg border border-slate-200 bg-white focus-within:border-emerald-400 flex flex-wrap gap-1.5 items-center cursor-text transition-colors shadow-inner"
                              onClick={() => document.getElementById('dt-customer-input')?.focus()}>
                           {(editData.customerAssignments || []).map((cust) => (
@@ -933,15 +1201,13 @@
                           ))}
                           <input id="dt-customer-input" type="text"
                             value={editData.customDtInput || ''}
-                            onChange={e => {
-                               setEdit('customDtInput', e.target.value);
-                               setEdit('dtFocus', true);
-                            }}
+                            onChange={e => { setEdit('customDtInput', e.target.value); setEdit('dtFocus', true); }}
                             onFocus={() => { setEdit('dtFocus', true); }}
                             onKeyDown={e => {
                               if (e.key === 'Enter' && editData.customDtInput?.trim()) {
                                 e.preventDefault();
-                                setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: editData.customDtInput.trim(), allocations: [] }]);
+                                const name = toTitleCase(editData.customDtInput.trim());
+                                setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: name, allocations: [] }]);
                                 setEdit('customDtInput', '');
                               }
                             }}
@@ -952,43 +1218,44 @@
                         {editData.dtFocus && (
                           <div className="absolute top-full mt-2 left-0 w-full bg-white border border-slate-200 rounded-xl shadow-2xl max-h-64 overflow-y-auto pop-in z-50 py-1">
                             {(() => {
-                               const CUSTOMER_OPTIONS = [
-                                  "SR Fruits", "MTR", "Selvam RD", "Sri Fruits", "AVN", "Chennai Fruits", 
-                                  "Thiruchendur murugan", "MNR Mayaan", "Annadatta", "Vamshi fruits", "Sai Karthik", 
-                                  "Santosh Fruit", "KRK", "CFC", "Gangothri", "VR Traders", "Akshay Ankush Shinde", 
-                                  "Anvesh Trading Co.", "Jay Ambey Fruits", "Shree Om Fruits", "Rajveer Singh", 
-                                  "Rajdhani Fruit Trader", "Fresh Frutz", "Waseem Ahmed Co."
-                               ];
                                const selectedNames = (editData.customerAssignments || []).map(c => c.customerName.toLowerCase());
-                               let filtered = CUSTOMER_OPTIONS.filter(o => !selectedNames.includes(o.toLowerCase()));
+                               let filtered = masterCustomers.filter(o => !selectedNames.includes(o.name.toLowerCase()));
                                if (editData.customDtInput?.trim()) {
-                                  filtered = filtered.filter(o => o.toLowerCase().includes(editData.customDtInput.toLowerCase()));
+                                  filtered = filtered.filter(o => o.name.toLowerCase().includes(editData.customDtInput.toLowerCase()));
                                }
                                
                                return (
                                 <>
-                                  {filtered.map(d => (
-                                    <button key={d} type="button"
+                                  {filtered.map(c => (
+                                    <button key={c.id} type="button"
                                       onClick={() => { 
-                                        setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: d, allocations: [] }]);
+                                        setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: c.name, allocations: [] }]);
+                                        if (!editData.destination?.trim()) setEdit('destination', c.destination_market);
                                         setEdit('customDtInput', '');
                                         document.getElementById('dt-customer-input')?.focus();
                                       }}
                                       className="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer border-b border-slate-50 last:border-0 transition-colors"
                                     >
-                                      {d}
+                                      <div className="flex justify-between items-center">
+                                        <span>{c.name}</span>
+                                        <span className="text-[10px] text-slate-400">{c.destination_market}</span>
+                                      </div>
                                     </button>
                                   ))}
-                                  {editData.customDtInput?.trim() && !CUSTOMER_OPTIONS.some(o => o.toLowerCase() === editData.customDtInput.toLowerCase()) && (
-                                    <div className="px-4 py-2.5 text-xs text-slate-500 bg-slate-50 border-t border-slate-100 flex justify-between items-center cursor-pointer hover:bg-emerald-50 group transition-colors"
+                                  {editData.customDtInput?.trim() && !masterCustomers.some(o => o.name.toLowerCase() === editData.customDtInput.toLowerCase()) && (
+                                    <div className="px-4 py-2.5 text-xs text-emerald-600 bg-emerald-50 border-t border-slate-100 flex justify-between items-center cursor-pointer hover:bg-emerald-100 group transition-colors"
                                          onMouseDown={(e) => e.preventDefault()}
-                                         onClick={() => {
-                                           setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: editData.customDtInput.trim(), allocations: [] }]);
-                                           setEdit('customDtInput', '');
-                                           document.getElementById('dt-customer-input')?.focus();
+                                         onClick={async () => {
+                                           const newC = await addMasterCustomer(editData.customDtInput);
+                                           if (newC) {
+                                              setEdit('customerAssignments', [...(editData.customerAssignments || []), { id: Date.now().toString(), customerName: newC.name, allocations: [] }]);
+                                              if (!editData.destination?.trim()) setEdit('destination', newC.destination_market);
+                                              setEdit('customDtInput', '');
+                                              document.getElementById('dt-customer-input')?.focus();
+                                           }
                                          }}>
-                                      <span>Add custom customer: <strong className="text-slate-800 group-hover:text-emerald-800">{editData.customDtInput}</strong></span>
-                                      <span className="text-[9px] bg-slate-200 px-1.5 py-0.5 rounded text-slate-600 font-bold uppercase tracking-widest leading-none group-hover:bg-emerald-200 group-hover:text-emerald-800">Enter</span>
+                                      <span>+ Add <strong>{toTitleCase(editData.customDtInput)}</strong> to Customers</span>
+                                      <span className="text-[9px] bg-emerald-200 px-1.5 py-0.5 rounded text-emerald-800 font-bold uppercase tracking-widest leading-none">Enter</span>
                                     </div>
                                   )}
                                   {filtered.length === 0 && !editData.customDtInput?.trim() && (
@@ -1059,9 +1326,7 @@
                         
                         {/* RIGHT COLUMN: Marka Tags & Select */}
                         <div className="md:w-2/3 flex-1 w-full">
-                           <div className="relative z-30" onBlur={e => {
-                             if (!e.currentTarget.contains(e.relatedTarget)) setEdit(`markaFocus_${cIdx}`, false);
-                           }}>
+                           <div id={`marka-container-${cIdx}`} className="relative z-30">
                              <div className="min-h-12 p-2 rounded-xl border border-slate-200 bg-white focus-within:border-emerald-400 flex flex-wrap gap-2 items-center cursor-text transition-colors shadow-inner"
                                   onClick={() => document.getElementById(`marka-input-${cIdx}`)?.focus()}>
                                
@@ -1139,7 +1404,7 @@
                                             const upd = [...(editData.customerAssignments || [])];
                                             upd[cIdx].allocations.push({ id: Date.now().toString(), brand: bn, boxes: remaining.toString() });
                                             setEdit('customerAssignments', upd);
-                                            setEdit(`markaFocus_${cIdx}`, false);
+                                            // Removed setEdit(\`markaFocus_${cIdx}\`, false) so the dropdown stays open for multi-select
                                           }}
                                           className="w-full flex justify-between items-center px-4 py-2.5 hover:bg-emerald-50 cursor-pointer border-b border-slate-50 last:border-0 transition-colors group"
                                         >
@@ -1258,7 +1523,7 @@
 
                   {/* ── TOP SUMMARY CARD: Origin → Destination + Weather ── */}
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className="grid grid-cols-1 lg:grid-cols-13 divide-y lg:divide-y-0 lg:divide-x divide-slate-100" style={{ gridTemplateColumns: '5fr 1fr 4fr 2fr' }}>
+                    <div className="grid grid-cols-1 lg:grid-cols-13 divide-y lg:divide-y-0 lg:divide-x divide-slate-100" style={{ gridTemplateColumns: '5fr 1fr 4fr' }}>
 
                       {/* Left: Origin + Supplier */}
                       <div className="p-5">
@@ -1273,7 +1538,7 @@
                           </div>
                           <div className="text-right min-w-0 export-hide-supplier">
                             <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Supplier</div>
-                            <div className="text-sm font-bold text-slate-700 truncate pb-1" title={localDetails.supplier}>{localDetails.supplier}</div>
+                            <div className="text-sm font-bold text-slate-700 break-words leading-snug pb-1" title={localDetails.supplier}>{localDetails.supplier}</div>
                           </div>
                         </div>
                       </div>
@@ -1286,7 +1551,7 @@
                         <div className="flex items-start justify-between gap-4">
                           <div className="min-w-0">
                             <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Customer / DT</div>
-                            <div className="text-sm font-bold text-slate-700 truncate pb-1" title={localDetails.dtName || '—'}>{localDetails.dtName || '—'}</div>
+                            <div className="text-sm font-bold text-slate-700 break-words leading-snug pb-1" title={localDetails.dtName || '—'}>{localDetails.dtName || '—'}</div>
                           </div>
                           <div className="text-right">
                             <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Destination</div>
@@ -1296,13 +1561,6 @@
                         </div>
                       </div>
 
-                      {/* Weather Square */}
-                      <div className="p-4 flex flex-col items-center justify-center gap-1 bg-slate-50">
-                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Weather</div>
-                        <div className="text-3xl leading-none mt-1">{w.icon}</div>
-                        <div className="text-base font-black text-slate-900">{w.temp}</div>
-                        <div className="text-[9px] text-slate-500">{w.cond}</div>
-                      </div>
 
                     </div>
                   </div>
@@ -1419,16 +1677,16 @@
                       <div className="px-6 py-4 border-b border-slate-100">
                         <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🚛 Load Plan</h2>
                       </div>
-                      <div className="p-4 flex flex-col items-center flex-1 bg-slate-50/30">
-                        <div className="relative w-full max-w-[200px] flex flex-col my-4">
+                      <div className="p-4 flex flex-col items-center justify-center flex-1 bg-slate-50/30">
+                        <div className="relative w-full max-w-[220px] mx-auto flex flex-col my-4">
                           <div className="h-10 mx-4 bg-gradient-to-b from-slate-700 to-slate-800 rounded-t-xl shadow-lg"></div>
-                          <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[280px]">
+                          <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[320px]">
                             {trip.loadingZones.length === 0
                               ? <div className="flex-1 flex items-center justify-center text-slate-300 text-xs border-2 border-dashed border-slate-200 rounded m-1">No Load Data</div>
                               : trip.loadingZones.map(z => (
                                 <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} ${z.border} flex flex-col items-center justify-center text-center`}>
-                                  <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text}`}>{z.name}</span>
-                                  <span className={`text-[10px] font-bold ${z.text} line-clamp-1 mt-0.5`}>{cleanBrandName(z.description)}</span>
+                                  <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text} break-words w-full px-1`}>{z.name}</span>
+                                  <span className={`text-[10px] sm:text-[11px] font-bold ${z.text} break-words w-full mt-0.5 leading-normal px-1`}>{cleanBrandName(z.description)}</span>
                                   <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
                                 </div>
                               ))
@@ -1468,16 +1726,21 @@
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">Upload videos / proofs</p>
                     </div>
                     : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                      {videos.map(v => (
+                      {videos.map(v => {
+                        const isImg = /\.(png|jpg|jpeg|gif|webp)$/i.test(v.title);
+                        return (
                         <div key={v.id} className="relative bg-slate-900 rounded-lg overflow-hidden aspect-video group">
-                          <video src={v.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" controls />
-                          <button onClick={() => setVideos(vs => vs.filter(x => x.id !== v.id))}
+                          {isImg
+                            ? <img src={v.url} alt={v.title} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" />
+                            : <video src={v.url} className="w-full h-full object-cover opacity-80 group-hover:opacity-100" controls />}
+                          <button onClick={() => deleteMedia(v)}
                             className="absolute top-2 right-2 p-1 bg-black/50 text-white rounded-full hover:bg-red-500 opacity-0 group-hover:opacity-100 transition-all">✕</button>
                           <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent pointer-events-none">
                             <p className="text-xs font-bold text-white truncate">{v.title}</p>
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   }
                 </div>
@@ -1490,16 +1753,14 @@
             <div className="space-y-6 fade-in">
               {/* Market Reception & Sales content ... (I will keep the existing logic but fix the wrappers) */}
               {/* Sticky floating save button */}
-              {activeTab === 'market' && (
-                <div className="save-float">
+              <div className="save-float">
                   <button onClick={saveMarketData} disabled={saving}
                     className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-sm px-5 py-3 rounded-2xl shadow-xl transition-all disabled:opacity-50 flex items-center gap-2">
                     {saving ? <><span className="animate-spin inline-block">↻</span> Saving…</> : '💾 Save Market Data'}
                   </button>
                 </div>
-              )}
-
-              {/* Auto status bump prompt */}
+              
+              {/* Auto status{/* Auto status bump prompt */}
               {showStatusPrompt && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center justify-between gap-3 fade-in">
                   <p className="text-sm font-bold text-amber-800">🎉 Sales rates saved! Mark this trip as <span className="text-emerald-700">Sales Completed</span>?</p>
@@ -1525,11 +1786,22 @@
                 {/* ... existing market content ... */}
                 <div className="lg:col-span-3 space-y-6 fade-in">
                   <div className="bg-white rounded-2xl border border-slate-100 shadow-md p-6">
-                    <div className="flex items-center justify-between mb-6">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
                       <div>
                         <h2 className="text-lg font-black text-slate-900 leading-tight">📍 Market Reception & Sales</h2>
                         <p className="text-xs text-slate-500 font-bold uppercase tracking-widest mt-0.5">Enter actual arrival stock and sales rates</p>
                       </div>
+                      {customerAssignments.length > 1 && (
+                        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 overflow-x-auto whitespace-nowrap">
+                          {customerAssignments.map(cust => (
+                            <button key={cust.id} 
+                              onClick={() => setSelectedDtId(cust.id)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${selectedDtId === cust.id ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                              🧑‍💼 {cust.customerName}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="overflow-x-auto">
@@ -1549,17 +1821,48 @@
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50 text-sm">
-                          {trip.marks.map(m => (
-                            <React.Fragment key={m.id}>
-                              <tr className="bg-slate-50/50">
-                                <td colSpan="6" className="py-1.5 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">{cleanBrandName(m.name)}</td>
-                              </tr>
-                              {trip.gradeColumns.map(grade => {
-                                const v = m.grades[grade];
-                                if (!v) return null;
-                                const data = itemData[v.id] || { received: v.received || '', rate: v.rate || '' };
-                                const diff = (parseInt(data.received) || 0) - v.manifest;
-                                const rowTotal = (parseInt(data.received) || 0) * (parseFloat(data.rate) || 0);
+                          {(() => {
+                            const currentCust = customerAssignments.find(c => c.id === selectedDtId) || (customerAssignments.length > 0 ? customerAssignments[0] : null);
+                            const marksToShow = currentCust 
+                              ? trip.marks.filter(m => currentCust.allocations.some(a => a.brand === m.name)) 
+                              : trip.marks;
+                            
+                            if (marksToShow.length === 0 && customerAssignments.length > 0) {
+                              return <tr><td colSpan="6" className="py-20 text-center text-slate-400 italic">No markas allocated to this customer. Go to "Edit Details" to allocate.</td></tr>;
+                            }
+
+                            return marksToShow.map(m => (
+                              <React.Fragment key={m.id}>
+                                <tr className="bg-slate-50/50">
+                                  <td colSpan="6" className="py-1.5 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                    {cleanBrandName(m.name)} 
+                                    {currentCust && (
+                                      <span className="ml-2 text-emerald-600">
+                                        (Allocated: {currentCust.allocations.find(a => a.brand === m.name)?.boxes || 0} bx)
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                                {trip.gradeColumns.map(grade => {
+                                  const v = m.grades[grade];
+                                  if (!v) return null;
+                                  
+                                  // Data entry logic for the selected DT
+                                  // Use dtSalesData[selectedDtId][v.id] if exists, otherwise fallback to itemData[v.id] (for migration/defaults)
+                                  const data = (dtSalesData[selectedDtId] && dtSalesData[selectedDtId][v.id]) || itemData[v.id] || { received: '', rate: '' };
+                                  const setDtItem = (vId, key, val) => {
+                                    setDtSalesData(prev => ({
+                                      ...prev,
+                                      [selectedDtId]: {
+                                        ...(prev[selectedDtId] || {}),
+                                        [vId]: { ...(prev[selectedDtId]?.[vId] || (itemData[vId] || { received: '', rate: '' })), [key]: val }
+                                      }
+                                    }));
+                                  };
+                                const rNum = parseFloat(data.received) || 0;
+                                const rtNum = parseFloat(data.rate) || 0;
+                                const diff = rNum - v.manifest;
+                                const rowTotal = rNum * rtNum;
 
                                 // Variance alert: received < manifest by >5%
                                 const shortage = v.manifest > 0 ? (v.manifest - (parseInt(data.received) || 0)) / v.manifest : 0;
@@ -1572,7 +1875,7 @@
                                     <td className="py-2.5 px-2 text-center font-mono font-bold text-slate-400">{v.manifest}</td>
                                     <td className="py-2.5 px-2 text-center bg-emerald-50/30">
                                       <input type="number" value={data.received}
-                                        onChange={e => setItem(v.id, 'received', e.target.value)}
+                                        onChange={e => setDtItem(v.id, 'received', e.target.value)}
                                         placeholder="0"
                                         className="w-16 h-8 text-center text-sm font-black text-emerald-700 bg-white border border-emerald-200 rounded focus:border-emerald-500 focus:outline-none" />
                                     </td>
@@ -1585,7 +1888,7 @@
                                       <>
                                         <td className="py-2.5 px-2 text-center bg-blue-50/30">
                                           <input type="number" value={data.rate}
-                                            onChange={e => setItem(v.id, 'rate', e.target.value)}
+                                            onChange={e => setDtItem(v.id, 'rate', e.target.value)}
                                             placeholder="0.00"
                                             className="w-20 h-8 text-center text-sm font-black text-blue-700 bg-white border border-blue-200 rounded focus:border-blue-500 focus:outline-none placeholder:text-blue-200" />
                                         </td>
@@ -1598,7 +1901,8 @@
                                 );
                               })}
                             </React.Fragment>
-                          ))}
+                            ));
+                          })()}
                         </tbody>
                       </table>
                     </div>
@@ -1673,55 +1977,244 @@
             </div>
           )}
 
-          {custPdfData && (
+                    {custPdfData && (() => {
+            const custMarks = trip.marks.filter(m => custPdfData.allocations.some(a => a.brand === m.name));
+            const custTotals = {};
+            let custGrand = 0;
+            trip.gradeColumns.forEach(k => custTotals[k] = 0);
+            custMarks.forEach(m => {
+              Object.entries(m.grades).forEach(([k, v]) => {
+                custTotals[k] = (custTotals[k] || 0) + v.manifest;
+                custGrand += v.manifest;
+              });
+            });
+            custTotals.grand = custGrand;
+            const custCap = Math.min(Math.round((custTotals.grand / MAX_TRUCK_CAPACITY) * 100), 100);
+            const custZone = trip.loadingZones.filter(z => custMarks.some(m => cleanBrandName(m.name) === cleanBrandName(z.description)));
+            return (
             <div className="absolute top-0 left-[-9999px] z-0 bg-[#F8FAFC] w-[1000px] p-8 shadow-xl">
-              <div id="hidden-customer-export-container" className="bg-[#F8FAFC] rounded-xl space-y-6 block p-4 shadow-sm border border-slate-200">
+              <div id="hidden-customer-export-container" className="bg-[#F8FAFC] rounded-xl space-y-6 block shadow-sm border border-slate-200 fade-in relative p-6">
+                
+                {/* ── EXPORT HEAD ── */}
                 <div className="text-center mb-4 pt-2 pb-4 border-b-2 border-slate-200">
-                  <div className="text-xl font-black text-slate-800 uppercase tracking-widest mt-3">Customer Manifest</div>
-                  <div className="text-sm font-bold text-indigo-600 uppercase tracking-widest mt-1">Bill To: {custPdfData.customerName || 'Customer'}</div>
+                  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAD5CAYAAAC5z0dBAAAQAElEQVR4AeydB6AU1fXGz519jW5XwAJYAUuMphgbmkQDUtQIiTE9CjFGoyYxRYW1J9bEDmhM+adJmtJsSdBYUkSNCnYhitgiIv3B27n/70MxT31l3+6d3dnd73EOd3Z25txzf1N27rllItOfCIiACIiACIiACIiACIiACIiACIhAtRMwBQCq/hCrgCIgAiIgAiIgAiIgAiIgAiIgAiJgCgDoJBABERABERABERABERABERABERCBqieAAqoHACBIREAEREAEREAEREAEREAEREAERKCaCbBsCgCQglQEREAEREAEREAEREAEREAEREAEqpfA+pIpALAeg/4TAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoQUREAEREAEREAEREAEREAEREAERKA6CLyrFAoAvAuIPoqACIiACIiACIiACIiACIiACIhANRB4dxkUAHg3EX0WAREQAREQAREQAREQAREQAREQgWol8Ga5FAB4k4P+FwEREAEREAEREAEREAEREAEREIHqJPBWqRQAeAuEEhEQAREQAREQAREQAREQAREQARGoRgIbyqQAwAYSSkVABERABERABERABERABERABESg+gi8XSIFAN5GoRQQOAAAAAElFTkSuQmCC" alt="Ninjacart" className="h-10 mx-auto object-contain" />
+                  <div className="text-sm font-bold text-slate-500 uppercase tracking-widest mt-3">Trip Manifest & Load Plan - Customer Copy</div>
                 </div>
-                <div className="space-y-4 pt-2">
-                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden break-inside-avoid shadow-sm">
-                    <div className="grid grid-cols-2 divide-x divide-slate-100 p-5">
-                      <div className="flex gap-4"><div className="text-3xl">🛻</div><div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Trip Details</p><p className="font-bold text-slate-800 text-lg leading-tight mt-1">{localDetails.tripId}</p><p className="font-bold text-slate-500 text-sm mt-0.5">{localDetails.vehicleNo}</p></div></div>
-                      <div className="flex gap-4 pl-5"><div className="text-3xl">📍</div><div><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Route</p><p className="font-bold text-slate-800 text-lg leading-tight mt-1">{localDetails.origin} <span className="text-slate-300">→</span> {localDetails.destination}</p><p className="font-bold text-emerald-600 text-sm mt-0.5 whitespace-nowrap">📅 {fmtDate(localDetails.dispatchDate)}</p></div></div>
+
+                <div className="space-y-3">
+                  
+                  {/* ── TOP SUMMARY CARD: Origin → Destination + Weather ── */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden break-inside-avoid">
+                    <div className="grid grid-cols-1 lg:grid-cols-13 divide-y lg:divide-y-0 lg:divide-x divide-slate-100" style={{ gridTemplateColumns: '4fr 1fr 4fr' }}>
+                      <div className="p-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Origin</div>
+                            <div className="text-xl font-black text-slate-900">{localDetails.origin}</div>
+                            <div className="text-xs font-semibold text-emerald-600 mt-1">📅 {fmtDate(localDetails.dispatchDate)}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-center p-3 text-slate-200 text-2xl select-none">→</div>
+                      <div className="p-5">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest mb-1">Bill To / Customer</div>
+                            <div className="text-lg font-black text-indigo-700 break-words leading-snug pb-1">{custPdfData.customerName || 'Customer'}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Destination</div>
+                            <div className="text-xl font-black text-slate-900">{localDetails.destination}</div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden break-inside-avoid">
-                    <div className="px-5 py-3 bg-slate-800 text-white flex justify-between items-center"><h4 className="font-black text-sm uppercase tracking-widest text-slate-200">Assigned Inventory</h4><span className="text-xs font-bold bg-white/20 px-3 py-1 rounded-full">{custPdfData.allocations.reduce((s, b) => s + (parseInt(b.boxes)||0), 0)} Total Boxes</span></div>
-                    <table className="w-full text-left font-semibold"><thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200"><tr><th className="py-3 px-5">Brand / Mark</th><th className="py-3 px-5 text-right w-40">Assigned Quantity</th></tr></thead><tbody className="divide-y divide-slate-100 text-slate-800">{custPdfData.allocations.map((b, i) => (<tr key={i} className="hover:bg-slate-50"><td className="py-4 px-5 text-sm font-bold border-r border-slate-50">{b.brand ? b.brand.replace(/\u200B/g, '') : '—'}</td><td className="py-4 px-5 text-right text-base font-black bg-emerald-50 text-emerald-800">{parseInt(b.boxes)||0} 📦</td></tr>))}</tbody></table>
+
+                  {/* ── SECONDARY ROW: 3 even columns ── */}
+                  <div className="grid grid-cols-3 gap-3 items-stretch break-inside-avoid">
+                    <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">📦 Assigned Total</div>
+                      <div className="flex justify-between items-baseline">
+                        <span className="text-base font-black text-slate-900">{custTotals.grand}</span>
+                        <span className="text-[10px] text-slate-400">/ {MAX_TRUCK_CAPACITY}</span>
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-1 mt-1.5 overflow-hidden">
+                        <div className={`h-full rounded-full ${custCap > 90 ? 'bg-red-500' : 'bg-indigo-400'}`} style={{ width: `${custCap}%` }}></div>
+                      </div>
+                      <div className={`text-[9px] font-bold mt-1 ${custCap > 90 ? 'text-red-500' : 'text-emerald-600'}`}>{custCap}% Load</div>
+                    </div>
+                    <div className="bg-white rounded-xl p-4 border border-slate-100 shadow-sm flex flex-col justify-between">
+                      <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-2">🚛 Vehicle & Driver</div>
+                      <div className="flex justify-between items-center mt-auto">
+                        <div className="text-lg font-black text-slate-800">{localDetails.vehicleNo}</div>
+                        <div className="text-right">
+                          <div className="text-base font-bold text-slate-700">{localDetails.driverName}</div>
+                          <div className="text-xs font-semibold text-slate-400 mt-0.5">{localDetails.driverContact}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className={`bg-white rounded-xl py-5 px-4 border border-slate-100 shadow-sm h-full flex flex-col items-center justify-center ${trip.details.liveUrl === '#' ? 'opacity-50' : ''}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xl">🧭</span>
+                        <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Live Tracking Link</div>
+                      </div>
+                      <div className="text-sm font-black text-emerald-600 truncate pb-1">
+                        {trip.details.liveUrl === '#' ? 'No tracking available' : 'Tracking link provided via SMS'}
+                      </div>
+                    </div>
                   </div>
                 </div>
+
+                {/* ── MANIFEST & LOAD PLAN GRID ── */}
+                <div className="pt-6 border-t border-slate-200 break-inside-avoid">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 export-flex-row">
+                    
+                    {/* Manifest */}
+                    <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+                      <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center">
+                        <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">📋 Customer Manifest Details</h2>
+                        <div className="flex gap-4 text-xs font-bold px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
+                          <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Total</span> <span className="text-slate-900 leading-none mt-1">{custTotals.grand} Box</span></div>
+                          <div className="w-px bg-slate-200"></div>
+                          <div className="flex flex-col"><span className="text-slate-400 text-[9px] uppercase tracking-widest leading-none">Cap.</span> <span className={`${custCap > 90 ? 'text-emerald-600' : 'text-slate-900'} leading-none mt-1`}>{custCap}%</span></div>
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 text-xs text-slate-500 font-bold uppercase border-b border-slate-200">
+                              <th className="px-5 py-3 sticky left-0 bg-slate-50 border-r border-slate-200">Grade / Variety</th>
+                              {custMarks.map((m, i) => <th key={i} className="px-5 py-3 text-center min-w-[90px]">{cleanBrandName(m.name)}</th>)}
+                              <th className="px-5 py-3 text-right sticky right-0 bg-slate-50 border-l border-slate-200">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {custMarks.length === 0
+                              ? <tr><td colSpan={custMarks.length + 2} className="px-5 py-10 text-center text-slate-400 text-sm">No manifest data</td></tr>
+                              : trip.gradeColumns.map(grade => (
+                                <tr key={grade} className="hover:bg-slate-50 transition-colors">
+                                  <td className="px-5 py-3 font-bold text-slate-700 border-r border-slate-100 sticky left-0 bg-white">{grade}</td>
+                                  {custMarks.map((m, i) => (
+                                    <td key={i + grade} className="px-5 py-3 text-center">
+                                      {m.grades[grade]?.manifest
+                                        ? <span className="font-semibold text-slate-700">{m.grades[grade].manifest}</span>
+                                        : <span className="text-slate-200">•</span>}
+                                    </td>
+                                  ))}
+                                  <td className="px-5 py-3 text-right font-black text-slate-800 border-l border-slate-100 sticky right-0 bg-white">{custTotals[grade] || 0}</td>
+                                </tr>
+                              ))
+                            }
+                          </tbody>
+                          {custMarks.length > 0 && (
+                            <tfoot className="border-t border-slate-200 bg-slate-50 font-bold">
+                              <tr>
+                                <td className="px-5 py-3 text-xs uppercase text-slate-500 sticky left-0 bg-slate-50 border-r border-slate-200">Totals</td>
+                                {custMarks.map((m, i) => {
+                                  let cTot = 0; trip.gradeColumns.forEach(g => cTot += (m.grades[g]?.manifest || 0));
+                                  return (
+                                    <td key={i} className="px-5 py-3 text-center text-emerald-700 font-black">
+                                      {cTot > 0 ? cTot : <span className="text-slate-200">•</span>}
+                                    </td>
+                                  );
+                                })}
+                                <td className="px-5 py-3 text-right text-slate-900 font-black text-base sticky right-0 bg-slate-50 border-l border-slate-200">{custTotals.grand}</td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Load plan */}
+                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+                      <div className="px-6 py-4 border-b border-slate-100">
+                        <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">🚛 Assigned Load Plan</h2>
+                      </div>
+                      <div className="p-4 flex flex-col items-center justify-center flex-1 bg-slate-50/30">
+                        <div className="relative w-full max-w-[220px] mx-auto flex flex-col my-4">
+                          <div className="h-10 mx-4 bg-gradient-to-b from-slate-700 to-slate-800 rounded-t-xl shadow-lg"></div>
+                          <div className="bg-white border-4 border-slate-300 rounded-b-lg p-1 flex flex-col gap-1 shadow-xl min-h-[320px]">
+                            {custZone.length === 0
+                              ? <div className="flex-1 flex items-center justify-center text-slate-300 text-xs border-2 border-dashed border-slate-200 rounded m-1">No Load Data</div>
+                              : custZone.map(z => (
+                                <div key={z.id} className={`flex-1 p-2 rounded border ${z.bg} flex flex-col items-center justify-center text-center`}>
+                                  <span className={`text-[9px] font-bold uppercase tracking-widest opacity-70 ${z.text} break-words w-full px-1`}>{z.name}</span>
+                                  <span className={`text-[10px] font-bold ${z.text} break-words w-full mt-0.5 leading-normal px-1`}>{cleanBrandName(z.description)}</span>
+                                  <span className={`mt-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold ${z.badge}`}>{z.count} Boxes</span>
+                                </div>
+                              ))
+                            }
+                          </div>
+                          <div className="absolute -right-2 top-14 w-2 h-8 bg-black rounded-r"></div>
+                          <div className="absolute -left-2 top-14 w-2 h-8 bg-black rounded-l"></div>
+                          <div className="absolute -right-2 bottom-6 w-2 h-8 bg-black rounded-r"></div>
+                          <div className="absolute -left-2 bottom-6 w-2 h-8 bg-black rounded-l"></div>
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+
               </div>
             </div>
-          )}
+            );
+          })()}
+
           {/* Export Preview Modal */}
           {exportPreview && (
             <div className="fixed inset-0 bg-slate-900/80 z-[200] flex items-center justify-center p-4 lg:p-10 fade-in backdrop-blur-sm overflow-y-auto">
               <div className="bg-white rounded-2xl overflow-hidden max-w-[1100px] w-full flex flex-col shadow-2xl border border-slate-700 h-full max-h-full">
+                
+                {/* Header */}
                 <div className="bg-slate-900 text-white px-6 py-4 flex justify-between items-center shrink-0">
                   <h3 className="font-bold flex items-center gap-2">👁️ Export Preview</h3>
                   <button onClick={() => setExportPreview(null)} className="text-slate-400 hover:text-white transition-colors bg-white/10 hover:bg-white/20 rounded-full w-8 h-8 flex items-center justify-center font-bold">✕</button>
                 </div>
-                <div className="p-4 bg-slate-200 flex-1 overflow-auto flex justify-center items-start border-b border-slate-200">
-                  <img src={exportPreview.imgData} alt="Preview" className="max-w-full shadow-lg border border-slate-300 rounded object-contain bg-white h-auto" />
+                
+                {/* Tabs */}
+                <div className="bg-slate-800 px-6 pt-3 flex gap-2 overflow-x-auto shrink-0 custom-scrollbar">
+                   <button 
+                      onClick={() => setExportPreview(p => ({ ...p, activeTab: 'overall' }))}
+                      className={`px-4 py-2.5 rounded-t-lg font-bold text-sm transition-colors whitespace-nowrap flex items-center gap-2 ${exportPreview.activeTab === 'overall' ? 'bg-slate-200 text-slate-900' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
+                      📄 Overall Manifest
+                   </button>
+                   {customerAssignments.filter(c => c.customerName && c.allocations && c.allocations.length > 0).map(cust => (
+                      <button 
+                         key={cust.id}
+                         onClick={() => loadCustomerPreview(cust)}
+                         className={`px-4 py-2.5 rounded-t-lg font-bold text-sm transition-colors whitespace-nowrap flex items-center gap-2 ${exportPreview.activeTab === cust.id ? 'bg-slate-200 text-slate-900' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white'}`}>
+                         {custPdfExporting === cust.id ? <span className="animate-spin text-lg leading-none">↻</span> : <span>🧾</span>}
+                         {cust.customerName}
+                      </button>
+                   ))}
                 </div>
+
+                {/* Preview Image Area */}
+                <div className="p-4 bg-slate-200 flex-1 overflow-auto flex justify-center items-start border-b border-slate-200 relative">
+                  {custPdfExporting ? (
+                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-200/80 backdrop-blur-sm z-10">
+                        <div className="animate-spin text-4xl mb-3 text-slate-600">↻</div>
+                        <p className="font-bold text-slate-600 uppercase tracking-widest text-xs">Generating Preview...</p>
+                     </div>
+                  ) : exportPreview.previews[exportPreview.activeTab] ? (
+                     <img src={exportPreview.previews[exportPreview.activeTab].imgData} alt="Preview" className="max-w-full shadow-lg border border-slate-300 rounded object-contain bg-white h-auto" />
+                  ) : null}
+                </div>
+                
+                {/* Footer Controls */}
                 <div className="px-6 py-4 bg-slate-50 flex justify-between items-center shrink-0">
-                  <button onClick={() => setExportPreview(null)} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-xl transition-colors">Cancel</button>
+                  <button onClick={() => setExportPreview(null)} className="px-5 py-2.5 text-sm font-bold text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-xl transition-colors">Close</button>
+                  
                   <div className="flex gap-3">
                     <button onClick={() => handleDownloadExport('JPG')} className="px-6 py-2.5 text-sm font-bold text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-2 border border-indigo-200">
                       <span>🖼️</span> Download JPG
                     </button>
                     <button onClick={() => handleDownloadExport('PDF')} className="px-6 py-2.5 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-2 border">
-                      <span>📄</span> Full Manifest PDF
+                      <span>📄</span> Download PDF
                     </button>
-                    {customerAssignments.filter(c => c.customerName && c.allocations && c.allocations.length > 0).map((cust, i) => (
-                      <button key={i} onClick={() => captureHiddenCustomerPdf(cust)} disabled={custPdfExporting === cust.customerName} 
-                        className="px-6 py-2.5 text-sm font-bold text-violet-700 bg-violet-100 hover:bg-violet-200 rounded-xl transition-all shadow-sm active:scale-95 flex items-center gap-2 border disabled:opacity-50">
-                        {custPdfExporting === cust.customerName ? <span className="animate-spin text-lg leading-none">↻</span> : <span>📄</span>} 
-                        {custPdfExporting === cust.customerName ? 'Generating...' : `PDF: ${(cust.customerName || '').substring(0, 15)}`}
-                      </button>
-                    ))}
                   </div>
                 </div>
               </div>
@@ -1903,6 +2396,19 @@
       const [lastSynced, setLastSynced] = useState(null);
       const [isOnline, setIsOnline] = useState(navigator.onLine);
 
+      // --- MASTER DATA STATE ---
+      const [masterSuppliers, setMasterSuppliers] = useState([]);
+      const [masterCustomers, setMasterCustomers] = useState([]);
+
+      const fetchMasterData = useCallback(async () => {
+        try {
+          const { data: sData } = await supabase.from('suppliers').select('*').eq('is_active', true).order('name');
+          const { data: cData } = await supabase.from('customers').select('*').eq('is_active', true).order('name');
+          if (sData) setMasterSuppliers(sData);
+          if (cData) setMasterCustomers(cData);
+        } catch (e) { console.error("Failed to fetch master data", e); }
+      }, []);
+
       useEffect(() => {
         const up = () => setIsOnline(true);
         const down = () => setIsOnline(false);
@@ -1963,7 +2469,7 @@
         } finally { setSyncing(false); }
       }, []);
 
-      useEffect(() => { sync(); }, []);
+      useEffect(() => { sync(); fetchMasterData(); }, [sync, fetchMasterData]);
 
       const markets = useMemo(() => {
         const set = new Set(allTrips.map(t => t.details.destination).filter(d => d && d !== '--'));
@@ -2141,9 +2647,12 @@
               <DetailView
                 trip={currentTrip}
                 allTrips={allTrips}
+                masterSuppliers={masterSuppliers}
+                masterCustomers={masterCustomers}
                 onBack={() => setTab('fleet')}
                 onSwitch={id => setSelectedId(id)}
                 onUpdate={handleTripUpdate}
+                fetchMasterData={fetchMasterData}
               />
             )}
 
